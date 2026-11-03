@@ -71,7 +71,7 @@ docker compose --profile public up -d --build
 
 say "Einrichtungs-Link für das erste Konto"
 for _ in $(seq 1 30); do
-  LINK="$(docker compose logs backend 2>/dev/null | grep -o 'https\?://[^ ]*registrieren#setup=[^ ]*' | tail -n 1 || true)"
+  LINK="$(docker compose logs backend 2>/dev/null | grep -o 'https\?://[^ "]*registrieren#setup=[A-Za-z0-9_-]*' | tail -n 1 || true)"
   [ -n "$LINK" ] && break
   sleep 2
 done
