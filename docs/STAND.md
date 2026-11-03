@@ -9,10 +9,10 @@ Stand: 08.10.2026. Bei größeren Änderungen bitte aktualisieren (gemeinsame Da
 | --- | --- |
 | Repo | `oskar-hq/lukasoutreach`, Integrations-Branch `main` (Standard-Branch). Kopie von `oskar-hq/Scraper` @ `72be0b0` (03.11.2026). Arbeit auf eigenen Branches plus PR, siehe `CLAUDE.md` |
 | Zweck | Instanz für Lukas (CEO): VCs + Startups im DACH-Raum, Events als Signal, Firmen-Kette – siehe `docs/LUKAS.md` |
-| Produktivserver | neuer Hostinger-VPS → **https://lukas.ylvalabs.de** |
+| Produktivserver | Hostinger-VPS `187.126.25.54`, Hostname `srv2125119` → **https://lukas.ylvalabs.de** |
 | Installation dort | `~/outreach-cockpit`, Ersteinrichtung `bash deploy/install.sh lukas.ylvalabs.de`, danach Updates unter Einstellungen → System |
 | Schutz | Caddy mit HTTPS (Let's Encrypt) + Anmeldung im Cockpit. Firewall ufw: nur 22, 80, 443 |
-| DNS | Cloudflare (Zone `ylvalabs.de`): A-Eintrag `lukas` → IP des neuen VPS, **Proxy aus** (nur DNS), kein AAAA-Eintrag |
+| DNS | Strato (Domainverwaltung `ylvalabs.de` → Subdomain `lukas` → DNS): A-Record → `187.126.25.54`, kein AAAA-Eintrag |
 | CI | GitHub Actions bei jedem PR gegen `main` |
 
 Geheimnisse liegen **nur** in `~/outreach-cockpit/.env` auf dem Server (Rechte 600), nie im Repo oder Chat.
