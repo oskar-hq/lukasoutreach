@@ -1,0 +1,39 @@
+{
+  "name": "linkedin-outreach-cockpit-demo",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:all": "node scripts/dev-all.mjs",
+    "server:dev": "npm run dev --prefix server",
+    "server:test": "npm test --prefix server",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b && npm run typecheck --prefix server",
+    "test:e2e": "playwright test",
+    "verify:frontend": "npm run build && playwright test",
+    "verify:backend": "npm run typecheck --prefix server && npm test --prefix server",
+    "verify": "npm run verify:backend && npm run verify:frontend",
+    "agents:status": "node scripts/agents-status.mjs"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "lucide-react": "^1.49.0",
+    "motion": "^13.5.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "recharts": "^3.10.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.2"
+  }
+}

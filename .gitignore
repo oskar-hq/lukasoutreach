@@ -1,0 +1,18 @@
+node_modules
+dist
+*.local
+.DS_Store
+test-results
+playwright-report
+.vite
+
+# Umgebungsvariablen mit Schlüsseln – nie committen
+.env
+.env.*
+!.env.example
+
+# Hochgeladene Tracking-Liste (lokale Entwicklung) – enthält personenbezogene Daten
+server/data/
+
+# Persönliche Claude-Code-Einstellungen (z. B. AGENT_ROLE) – die gemeinsame .claude/settings.json wird committet
+.claude/settings.local.json

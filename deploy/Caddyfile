@@ -1,0 +1,12 @@
+# Öffentlicher Zugang (nur mit `docker compose --profile public up -d`):
+# HTTPS mit automatischem Zertifikat (Let's Encrypt). Den Zugang schützt die Anmeldung im Cockpit (eigene Konten,
+# siehe README → „Anmeldung (Konten)“) – das frühere Browser-Passwortfenster (basic_auth) ist entfallen.
+# Wert aus der .env: SITE_ADDRESS (Domain oder :80).
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	# Frontend-Container (nginx); /api und Server-Sent Events leitet nginx weiter.
+	reverse_proxy {$UPSTREAM:outreach-cockpit:80} {
+		flush_interval -1
+	}
+}

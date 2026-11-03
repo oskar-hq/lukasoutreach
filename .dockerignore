@@ -1,0 +1,17 @@
+node_modules
+dist
+.git
+test-results
+playwright-report
+tests
+*.md
+.env
+.env.*
+**/node_modules
+**/dist
+server/test
+
+# Anweisungen für Claude gehören nicht ins Image
+**/CLAUDE.md
+docs
+deploy

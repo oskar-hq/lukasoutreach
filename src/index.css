@@ -1,0 +1,240 @@
+@import 'tailwindcss';
+
+/* Systemeinstellung „Transparenz reduzieren“: Glas und Unschärfe werden massiv (z. B. `reduced-transparency:bg-black`). */
+@custom-variant reduced-transparency (@media (prefers-reduced-transparency: reduce));
+
+@theme {
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter Variable', 'Segoe UI', system-ui, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter Variable', 'Segoe UI', system-ui,
+    sans-serif;
+
+  --color-canvas: #0b0b0c;
+  --color-surface-1: #111113;
+  --color-surface-2: #151517;
+  --color-surface-3: #1a1a1c;
+  --color-surface-4: #242427;
+  --color-line: rgb(255 255 255 / 0.06);
+  --color-line-strong: rgb(255 255 255 / 0.1);
+  --color-ink: #f2f2f3;
+  --color-ink-2: #8a8a8f;
+  --color-ink-3: #66666c;
+  --color-ink-4: #444449;
+  --color-accent: #2997ff;
+  --color-accent-soft: rgb(41 151 255 / 0.14);
+  --color-good: #30d158;
+  --color-warn: #ff9f43;
+  --color-bad: #ff453a;
+
+  /* überschreibt Tailwinds `ease-out` mit einer kräftigeren Kurve */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-apple: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+
+    /*
+     * Web-App auf dem Home-Bildschirm (iOS, `viewport-fit=cover`): Die Seite reicht unter Statusleiste, Notch und
+     * Home-Indikator. Diese Abstände halten Inhalte frei (im Browser sind sie 0). Siehe DESIGN.md → Mobil.
+     */
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+    /* Kopfleiste (inkl. Linie) und Tab-Leiste des Cockpits – für Höhen wie „ganzer Bildschirm minus Leisten“. */
+    --tab-bar-h: 52px;
+    --nav-top: 53px;
+    --nav-bottom: calc(var(--tab-bar-h) + 1px + var(--safe-bottom));
+    /* Platz für den Inhalt einer Cockpit-Ansicht: Bildschirm ohne Statusleiste, Kopf- und Tab-Leiste. */
+    --app-h: calc(100dvh - var(--safe-top) - var(--nav-top) - var(--nav-bottom));
+    /* Dialoge/Sheets: höchstens bis knapp unter die Statusleiste; innen abzüglich Home-Indikator. */
+    --sheet-max-h: calc(100dvh - var(--safe-top) - 24px);
+    --sheet-inner-max-h: calc(var(--sheet-max-h) - var(--safe-bottom));
+  }
+
+  @media (min-width: 640px) {
+    :root {
+      --nav-top: 73px;
+      --nav-bottom: 0px;
+    }
+  }
+
+  /* Inhalt beginnt unter der Statusleiste; der Streifen dahinter bleibt in Seitenfarbe (wie eine iOS-App). */
+  #root {
+    padding-top: var(--safe-top);
+    padding-left: var(--safe-left);
+    padding-right: var(--safe-right);
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0 0 auto;
+    height: var(--safe-top);
+    background: var(--color-canvas);
+    z-index: 60;
+    pointer-events: none;
+  }
+
+  html {
+    /* Keine automatische Schriftvergrößerung beim Drehen. */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  html,
+  body {
+    background: var(--color-canvas);
+    color: var(--color-ink);
+  }
+
+  body {
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+
+  ::selection {
+    background: rgb(41 151 255 / 0.35);
+    color: inherit;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: default;
+  }
+
+  /* Kein Warten auf einen möglichen Doppeltipp, kein grauer Tipp-Blitz des Browsers – die Rückmeldung kommt von uns. */
+  button,
+  a,
+  [role='button'],
+  [role='tab'],
+  [role='menuitem'],
+  [role='menuitemradio'] {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /*
+   * Rückmeldung schon beim Drücken (Apple: „Response“). Knöpfe ohne eigenes `active:` (Textlinks, Zeilen, Symbole)
+   * werden beim Drücken kurz heller gedimmt; beim Loslassen kehren sie ruhig zurück.
+   */
+  button:not(:disabled):not([class*='active:']) {
+    transition-property: color, background-color, border-color, opacity, transform;
+    transition-duration: 150ms;
+  }
+  button:not(:disabled):not([class*='active:']):active {
+    opacity: 0.6;
+    transition-duration: 0ms;
+  }
+
+  /* Touch: Knöpfe, Tabs und Leisten nicht versehentlich markieren, kein Kontextmenü beim langen Drücken auf Knöpfe. */
+  @media (pointer: coarse) {
+    button,
+    [role='tab'] {
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
+    }
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(41 151 255 / 0.8);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .display {
+    font-family: var(--font-display);
+    letter-spacing: -0.025em;
+    line-height: 1.08;
+  }
+
+  /* Textfeld mit farbig hervorgehobenen Variablen: Backdrop + transparente Textarea darüber */
+  .editor-layer {
+    font: inherit;
+    font-size: 16px;
+    line-height: 1.6;
+    letter-spacing: normal;
+    padding: 18px 22px;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    word-break: normal;
+    tab-size: 4;
+  }
+
+  .editor-input {
+    color: transparent;
+    caret-color: var(--color-ink);
+    -webkit-text-fill-color: transparent;
+  }
+
+  .editor-input::selection {
+    background: rgb(41 151 255 / 0.35);
+    -webkit-text-fill-color: transparent;
+  }
+
+  .variable-mark {
+    color: #64b5ff;
+    background: rgb(41 151 255 / 0.16);
+    border-radius: 4px;
+    box-shadow: 0 0 0 2px rgb(41 151 255 / 0.16);
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+  }
+
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(255 255 255 / 0.15) transparent;
+  }
+
+  .glass {
+    background: rgb(11 11 12 / 0.72);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass {
+    background: var(--color-surface-1);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/* Systemeinstellung „Kontrast erhöhen“: kräftigere Linien und Sekundärtexte */
+@media (prefers-contrast: more) {
+  :root {
+    --color-line: rgb(255 255 255 / 0.22);
+    --color-line-strong: rgb(255 255 255 / 0.36);
+    --color-ink-2: #d1d1d6;
+    --color-ink-3: #a1a1a6;
+  }
+  .glass {
+    background: var(--color-surface-1);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/*
+ * iOS zoomt beim Antippen in jedes Feld mit weniger als 16 px Schrift – und zoomt danach nicht zurück. Auf
+ * Touch-Geräten haben Felder deshalb immer mindestens 16 px (ohne Layer, damit es Tailwinds `text-[13px]` schlägt).
+ */
+@media (hover: none) and (pointer: coarse) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']),
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}

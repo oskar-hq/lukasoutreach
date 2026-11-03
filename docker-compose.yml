@@ -1,0 +1,108 @@
+# Protokolle begrenzen (je Dienst höchstens 3 × 10 MB): Sie enthalten IP-Adressen und Anmeldenamen und sollen nicht
+# unbegrenzt liegen bleiben (Datenschutz) oder die Platte füllen.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+services:
+  # Frontend: statische Dateien über nginx, leitet /api an das Backend weiter
+  outreach-cockpit:
+    logging: *logging
+    build:
+      context: .
+      # Build nutzt direkt das Netzwerk des Servers – vermeidet DNS-/Netzwerkprobleme
+      # beim Paket-Download, z. B. wenn Docker in einem Proxmox-LXC-Container läuft.
+      network: host
+    image: outreach-cockpit-demo:latest
+    container_name: outreach-cockpit-demo
+    ports:
+      # Standard: nur auf dem Server selbst (127.0.0.1) – von außen nur über Caddy (HTTPS). Docker umgeht die Firewall
+      # (ufw), ein offener Port wäre sonst ohne HTTPS aus dem Internet erreichbar.
+      # Heimnetz ohne Caddy (z. B. Proxmox): WEB_BIND=8080 in der .env, dann im ganzen Netz unter http://<IP>:8080.
+      - "${WEB_BIND:-127.0.0.1:8080}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # Backend der Lead-Suche – API-Keys nur hier, aus der Datei .env (nicht im Repo).
+  # Einmalig anlegen: cp .env.example .env  und die Schlüssel eintragen (oder später unter Einstellungen)
+  backend:
+    logging: *logging
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+      network: host
+      args:
+        # Stand, mit dem gebaut wurde – setzt der Update-Dienst; von Hand gebaut bleibt es leer.
+        APP_COMMIT: ${APP_COMMIT:-}
+        APP_COMMIT_TITLE: ${APP_COMMIT_TITLE:-}
+        APP_COMMIT_DATE: ${APP_COMMIT_DATE:-}
+    image: outreach-cockpit-backend:latest
+    container_name: outreach-cockpit-backend
+    env_file: .env
+    volumes:
+      # Hochgeladene Tracking-Liste bleibt über Neustarts und Neubauten erhalten
+      - lead-search-data:/app/server/data
+      # Schlüssel für den Update-Dienst (nur lesen)
+      - updater-shared:/shared:ro
+    networks: [default, updater]
+    restart: unless-stopped
+
+  # Update-Dienst (Einstellungen → System → Updates): holt neue Versionen per git und baut die Software neu.
+  # Kein Port nach außen; nur das Backend erreicht ihn (Netz „updater“), und nur mit dem Schlüssel aus updater-shared.
+  # Er braucht Docker (Socket) und das Projekt unter DEMSELBEN Pfad wie auf dem Server, weil docker compose relative
+  # Pfade (./deploy/Caddyfile, .env) gegen den Projektordner auflöst. ${PWD} und ${HOME} setzt die Shell, aus der
+  # docker compose gestartet wird – also immer im Projektordner starten, nicht mit sudo. Sonst in der .env
+  # UPDATER_PROJECT_DIR (Projektordner) und UPDATER_GIT_HOME (Home mit den git-Zugangsdaten) setzen.
+  updater:
+    logging: *logging
+    build:
+      context: deploy/updater
+    image: outreach-cockpit-updater:latest
+    container_name: outreach-cockpit-updater
+    working_dir: ${UPDATER_PROJECT_DIR:-${PWD:?PWD fehlt – docker compose in einer Shell im Projektordner starten oder UPDATER_PROJECT_DIR in der .env setzen}}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./:${UPDATER_PROJECT_DIR:-${PWD:?PWD fehlt – docker compose in einer Shell im Projektordner starten oder UPDATER_PROJECT_DIR in der .env setzen}}
+      # git-Zugang des Servers (SSH-Schlüssel, .gitconfig, .git-credentials), nur lesen
+      - ${UPDATER_GIT_HOME:-${HOME:?HOME fehlt – UPDATER_GIT_HOME in der .env setzen}}:/hosthome:ro
+      - updater-shared:/shared
+    networks: [updater, updater-egress]
+    restart: unless-stopped
+
+  # Nur für öffentliche Server (z. B. VPS): HTTPS + Passwortschutz davor.
+  # Start mit: docker compose --profile public up -d --build   (Werte siehe .env.example → „Öffentlicher Server“)
+  caddy:
+    logging: *logging
+    image: caddy:2-alpine
+    container_name: outreach-cockpit-caddy
+    profiles: ["public"]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - outreach-cockpit
+    restart: unless-stopped
+
+volumes:
+  lead-search-data:
+  caddy-data:
+  caddy-config:
+  updater-shared:
+
+networks:
+  default:
+  # Nur Backend ↔ Update-Dienst, ohne Weg nach außen
+  updater:
+    internal: true
+  # Nur für den Update-Dienst: git fetch bei GitHub
+  updater-egress:
