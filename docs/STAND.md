@@ -12,7 +12,7 @@ Stand: 08.10.2026. Bei größeren Änderungen bitte aktualisieren (gemeinsame Da
 | Produktivserver | Hostinger-VPS `187.126.25.54`, Hostname `srv2125119` → **https://lukas.ylvalabs.de** |
 | Installation dort | `~/outreach-cockpit`, Ersteinrichtung `bash deploy/install.sh lukas.ylvalabs.de`, danach Updates unter Einstellungen → System |
 | Schutz | Caddy mit HTTPS (Let's Encrypt) + Anmeldung im Cockpit. Firewall ufw: nur 22, 80, 443 |
-| DNS | Strato (Domainverwaltung `ylvalabs.de` → Subdomain `lukas` → DNS): A-Record → `187.126.25.54`, kein AAAA-Eintrag |
+| DNS | Cloudflare (Nameserver von `ylvalabs.de`, Domain selbst bei Strato registriert – DNS-Einträge bei Strato wirken nicht): A-Eintrag `lukas` → `187.126.25.54`, Proxy aus (nur DNS), kein AAAA |
 | CI | GitHub Actions bei jedem PR gegen `main` |
 
 Geheimnisse liegen **nur** in `~/outreach-cockpit/.env` auf dem Server (Rechte 600), nie im Repo oder Chat.
