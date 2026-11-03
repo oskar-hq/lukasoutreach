@@ -12,9 +12,9 @@ services:
     logging: *logging
     build:
       context: .
-      # Build nutzt direkt das Netzwerk des Servers – vermeidet DNS-/Netzwerkprobleme
-      # beim Paket-Download, z. B. wenn Docker in einem Proxmox-LXC-Container läuft.
-      network: host
+      # Kein `network: host` (Instanz Lukas 03.11.): Neuere Docker-Versionen verlangen dafür beim Bauen die Freigabe
+      # „--allow=network.host“ – ohne sie scheitert das Update über Einstellungen → System. Auf einem VPS ist das
+      # Netz des Servers zum Bauen nicht nötig (es war nur für Proxmox-LXC mit DNS-Problemen).
     image: outreach-cockpit-demo:latest
     container_name: outreach-cockpit-demo
     ports:
@@ -33,7 +33,6 @@ services:
     build:
       context: .
       dockerfile: server/Dockerfile
-      network: host
       args:
         # Stand, mit dem gebaut wurde – setzt der Update-Dienst; von Hand gebaut bleibt es leer.
         APP_COMMIT: ${APP_COMMIT:-}
