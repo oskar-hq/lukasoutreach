@@ -26,6 +26,7 @@ import { MetaAdLibraryClient, MetaAdsChecker } from './adapters/live/metaAdLibra
 import { UNIPILE_SESSION_DOWN_TEXT, UnipileClient, UnipileHttpError, isUnipileSessionDown, type UnipilePeopleResult } from './adapters/live/unipileClient.js';
 import { companySearchTerm } from './ads/metaAds.js';
 import { loadConfigWithSettings } from './settings/effective.js';
+import { usedAccountIds } from './config.js';
 import { parseQualification } from './qualify/schema.js';
 
 const config = loadConfigWithSettings();
@@ -77,7 +78,7 @@ async function main() {
     line('\n  ✗ UNIPILE_DSN und UNIPILE_API_KEY müssen in der .env stehen.');
     return;
   }
-  const unipile = new UnipileClient({ dsn: config.unipile.dsn, apiKey: config.unipile.apiKey });
+  const unipile = new UnipileClient({ dsn: config.unipile.dsn, apiKey: config.unipile.apiKey, onlyAccounts: () => usedAccountIds(config) });
 
   // 1. Account
   line('\n1) LinkedIn-Account bei Unipile');

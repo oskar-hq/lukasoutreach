@@ -124,6 +124,7 @@ export function valueOf(key: SettingKey, config: Config, env: Env): SettingValue
     case 'UNIPILE_ACCOUNT_NICK': return config.linkedin.accounts.nick;
     case 'UNIPILE_ACCOUNT_JOHANNES': return config.linkedin.accounts.johannes;
     case 'UNIPILE_WARMUP_ACCOUNTS': return config.linkedin.warmupAccounts.join(',') || null;
+    case 'UNIPILE_ACCOUNTS_USED': return config.unipile.usedAccounts.join(',') || null;
     case 'LINKEDIN_WARMUP_PER_DAY': return config.linkedin.warmupPerDay;
     case 'LINKEDIN_INVITES_PER_DAY': return config.linkedin.invitesPerDay;
     case 'LINKEDIN_ACCOUNT_FALLBACK': return config.linkedin.accountFallback ? 'on' : 'off';

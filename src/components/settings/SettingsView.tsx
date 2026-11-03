@@ -20,6 +20,7 @@ import { cn } from '../../lib/cn';
 import { ApiError, settingsApi } from '../../lib/leadSearchApi';
 import { useHotkeys } from '../../lib/useHotkeys';
 import { useAccess, useAuth } from '../../state/auth';
+import { FOUNDER_IDS } from '../../data/founders';
 import { useLeadSearch } from '../leadSearch/LeadSearchProvider';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
@@ -89,7 +90,7 @@ function savedText(state: SettingState | undefined): string | undefined {
 }
 
 /** Konten-Felder, die im LinkedIn-Bereich unter „IDs von Hand eintragen“ liegen. */
-const ACCOUNT_KEYS: readonly SettingKey[] = ['UNIPILE_ACCOUNT_NICK', 'UNIPILE_ACCOUNT_JOHANNES', 'UNIPILE_WARMUP_ACCOUNTS'];
+const ACCOUNT_KEYS: readonly SettingKey[] = ['UNIPILE_ACCOUNT_NICK', 'UNIPILE_ACCOUNT_JOHANNES', 'UNIPILE_WARMUP_ACCOUNTS', 'UNIPILE_ACCOUNTS_USED'];
 
 /**
  * Kennzeichen der Seitenleiste – nur was abweicht: Fehler, Entwurf, Problem am Wert, laufende Probe, fehlender
@@ -473,6 +474,10 @@ export function SettingsView({
           }}
           saved={{ nick: savedText(states.get('UNIPILE_ACCOUNT_NICK')), johannes: savedText(states.get('UNIPILE_ACCOUNT_JOHANNES')) }}
           warmup={splitIds(typeof draft.UNIPILE_WARMUP_ACCOUNTS === 'string' ? draft.UNIPILE_WARMUP_ACCOUNTS : savedText(states.get('UNIPILE_WARMUP_ACCOUNTS')))}
+          used={splitIds(typeof draft.UNIPILE_ACCOUNTS_USED === 'string' ? draft.UNIPILE_ACCOUNTS_USED : savedText(states.get('UNIPILE_ACCOUNTS_USED')))}
+          founders={FOUNDER_IDS.filter(
+            (id) => (auth.status === 'authenticated' && auth.user.founderNames?.[id]) || savedText(states.get(id === 'nick' ? 'UNIPILE_ACCOUNT_NICK' : 'UNIPILE_ACCOUNT_JOHANNES')),
+          )}
           ownFounder={access.role === 'founder' ? access.founder : null}
           onPick={(key, accountId) => setValue(key, accountId)}
           unsaved={unsaved}

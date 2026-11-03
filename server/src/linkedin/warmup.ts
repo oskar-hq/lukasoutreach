@@ -1,7 +1,7 @@
 import type { FastifyBaseLogger } from 'fastify';
 import { WARMUP_RAMP, type LinkedInWarmupAccount, type LinkedInWarmupResponse } from '../../../shared/linkedin.js';
 import { UnipileClient, UnipileHttpError } from '../adapters/live/unipileClient.js';
-import type { Config } from '../config.js';
+import { usedAccountIds, type Config } from '../config.js';
 import type { Database } from '../db/database.js';
 import { randomBetween, sleep } from '../lib/sleep.js';
 import type { AccountPrefsStore } from './accountPrefs.js';
@@ -83,7 +83,7 @@ export class WarmupService {
     const { dsn, apiKey } = this.config.unipile;
     if (this.mode !== 'live' || !dsn || !apiKey) return null;
     const key = `${dsn}|${apiKey}`;
-    if (this.client?.key !== key) this.client = { key, client: new UnipileClient({ dsn, apiKey, fetch: this.deps.fetch, timeoutMs: 30_000 }) };
+    if (this.client?.key !== key) this.client = { key, client: new UnipileClient({ dsn, apiKey, fetch: this.deps.fetch, timeoutMs: 30_000, onlyAccounts: () => usedAccountIds(this.config) }) };
     return this.client.client;
   }
 

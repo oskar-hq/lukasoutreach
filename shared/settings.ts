@@ -156,6 +156,7 @@ export const SETTING_KEYS = [
   'UNIPILE_ACCOUNT_NICK',
   'UNIPILE_ACCOUNT_JOHANNES',
   'UNIPILE_WARMUP_ACCOUNTS',
+  'UNIPILE_ACCOUNTS_USED',
   'LINKEDIN_WARMUP_PER_DAY',
   'INVITE_NOTE',
   'LINKEDIN_INVITES_PER_DAY',
@@ -374,6 +375,15 @@ export const SETTINGS: readonly SettingDefinition[] = [
     group: 'linkedin',
     label: 'Accounts aufwärmen',
     help: 'Diese Accounts schicken zu zufälligen Zeiten in der Arbeitszeit Vernetzungsanfragen (ohne Notiz) an qualifizierte Leads und Profile aus der Tracking-Liste – damit sie ins Netzwerk der Branche kommen und bessere Suchtreffer liefern. Gescraped wird über sie weiter. Nicht für die Accounts der Gründer. Unter „LinkedIn-Accounts“ per Klick wählen.',
+    type: 'text',
+    pattern: '^([A-Za-z0-9_-]{1,64}(,[A-Za-z0-9_-]{1,64})*)?$',
+  },
+  {
+    // Instanz Lukas 03.11.: derselbe Unipile-Zugang wie im anderen Cockpit – dessen Accounts bleiben hier unberührt.
+    key: 'UNIPILE_ACCOUNTS_USED',
+    group: 'linkedin',
+    label: 'Accounts in diesem Cockpit',
+    help: 'Nur diese bei Unipile verbundenen Accounts nutzt dieses Cockpit zum Suchen, Profile-Lesen und Senden – alle anderen ignoriert es (z. B. die eines anderen Cockpits mit demselben Unipile-Zugang). Leer = alle. Gründer- und Aufwärm-Accounts zählen immer dazu. Unter „LinkedIn-Accounts“ per Klick wählen.',
     type: 'text',
     pattern: '^([A-Za-z0-9_-]{1,64}(,[A-Za-z0-9_-]{1,64})*)?$',
   },

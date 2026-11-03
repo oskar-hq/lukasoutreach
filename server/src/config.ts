@@ -33,6 +33,8 @@ export interface Config {
     searchApi: 'classic' | 'sales_navigator';
     locationId: string | null;
     fetchCompany: boolean;
+    /** Accounts, die dieses Cockpit nutzen darf (`UNIPILE_ACCOUNTS_USED`); leer = alle. Siehe `usedAccountIds`. */
+    usedAccounts: string[];
   };
   anthropic: {
     apiKey: string | null;
@@ -308,6 +310,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       searchApi,
       locationId: text(env.UNIPILE_LOCATION_ID),
       fetchCompany: (text(env.UNIPILE_FETCH_COMPANY) ?? 'true').toLowerCase() !== 'false',
+      usedAccounts: [...new Set((text(env.UNIPILE_ACCOUNTS_USED) ?? '').split(',').map((id) => id.trim()).filter(Boolean))],
     },
     anthropic: {
       apiKey: text(env.ANTHROPIC_API_KEY),
@@ -414,6 +417,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 }
 
 /** Was für den Live-Modus noch fehlt (leer = startklar). */
+/**
+ * Accounts, die dieses Cockpit bei Unipile sehen darf (Instanz Lukas 03.11.): Mehrere Cockpits teilen sich einen
+ * Unipile-Zugang – ohne Auswahl würde jedes über alle Accounts suchen und Profile lesen, und die LinkedIn-Grenzen
+ * gälten doppelt. Leer (`UNIPILE_ACCOUNTS_USED` nicht gesetzt) = alle wie bisher. Sonst die gewählten plus alle, die
+ * ohnehin fest eingetragen sind (Gründer, Aufwärmen, Such-Account) – sonst fiele z. B. der eigene Account aus.
+ */
+export function usedAccountIds(config: Config): string[] {
+  const chosen = config.unipile.usedAccounts;
+  if (chosen.length === 0) return [];
+  const fixed = [...Object.values(config.linkedin.accounts), ...config.linkedin.warmupAccounts, config.unipile.accountId];
+  return [...new Set([...chosen, ...fixed.filter((id): id is string => Boolean(id))])];
+}
+
 export function liveProblems(config: Config): string[] {
   const problems: string[] = [];
   if (!config.unipile.dsn) problems.push('Die Unipile-Adresse fehlt (Einstellungen → LinkedIn (Unipile), z. B. https://api68.unipile.com:19881).');

@@ -164,7 +164,7 @@ const PAGE_PLAN: Record<SettingGroup, readonly (Omit<SettingsSubpage, 'group' | 
       inline: true,
       keys: ['LINKEDIN_ACTIONS', 'LINKEDIN_ACCOUNT_FALLBACK', 'LINKEDIN_INVITES_PER_DAY', 'LINKEDIN_MESSAGES_PER_DAY', 'LINKEDIN_WORK_HOURS', 'LINKEDIN_WORK_DAYS'],
     },
-    { name: 'accounts', label: 'LinkedIn-Accounts', keys: ['UNIPILE_ACCOUNT_NICK', 'UNIPILE_ACCOUNT_JOHANNES', 'UNIPILE_WARMUP_ACCOUNTS'], extra: 'linkedinAccounts' },
+    { name: 'accounts', label: 'LinkedIn-Accounts', keys: ['UNIPILE_ACCOUNT_NICK', 'UNIPILE_ACCOUNT_JOHANNES', 'UNIPILE_WARMUP_ACCOUNTS', 'UNIPILE_ACCOUNTS_USED'], extra: 'linkedinAccounts' },
     { name: 'unsent', label: 'Nicht gesendete Anfragen', keys: [], extra: 'unsentInvites' },
   ],
   anthropic: [{ name: 'main', label: 'KI-Bewertung', inline: true, keys: ['ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL'] }],

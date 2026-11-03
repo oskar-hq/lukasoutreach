@@ -21,7 +21,7 @@ import type { AccountStore } from '../auth/accounts.js';
 import { verifyPassword } from '../auth/password.js';
 import { Counter, LoginLimiter } from '../auth/rateLimit.js';
 import { hashSessionId, type SessionStore } from '../auth/sessions.js';
-import { SHARED_ACCOUNT_MESSAGE, loadConfig, sharedLinkedInAccount, type Config } from '../config.js';
+import { SHARED_ACCOUNT_MESSAGE, loadConfig, sharedLinkedInAccount, usedAccountIds, type Config } from '../config.js';
 import type { Database } from '../db/database.js';
 import { TREG_ENRICH_ID } from '../enrichment/service.js';
 import { AnthropicModels } from '../ai/models.js';
@@ -487,7 +487,7 @@ export class SettingsService {
   private async testUnipile(config: Config): Promise<SettingsTestResponse> {
     const { dsn, apiKey } = config.unipile;
     if (!dsn || !apiKey) return { ok: false, message: 'Unipile ist nicht eingerichtet (Adresse oder Token fehlt).' };
-    const client = new UnipileClient({ dsn, apiKey, fetch: this.deps.fetch, timeoutMs: 15_000 });
+    const client = new UnipileClient({ dsn, apiKey, fetch: this.deps.fetch, timeoutMs: 15_000, onlyAccounts: () => usedAccountIds(config) });
     const { items } = await client.listAccounts(AbortSignal.timeout(20_000));
     return unipileTestResult(items ?? [], config.unipile.accountId, config.unipile.searchApi);
   }

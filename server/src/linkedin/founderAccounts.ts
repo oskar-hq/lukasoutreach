@@ -1,6 +1,6 @@
 import { AUTH_FOUNDER_IDS, type AuthFounderId } from '../../../shared/auth.js';
 import { UnipileClient, type UnipileAccount } from '../adapters/live/unipileClient.js';
-import type { Config } from '../config.js';
+import { usedAccountIds, type Config } from '../config.js';
 
 /**
  * Ist der LinkedIn-Account eines Gründers gerade nutzbar? (Wunsch des Nutzers 17.10., Nicks Account gesperrt und bei
@@ -48,7 +48,7 @@ export class FounderAccounts {
     let items: UnipileAccount[] | null = null;
     if (dsn && apiKey) {
       try {
-        const client = new UnipileClient({ dsn, apiKey, fetch: this.deps.fetch, timeoutMs: 10_000 });
+        const client = new UnipileClient({ dsn, apiKey, fetch: this.deps.fetch, timeoutMs: 10_000, onlyAccounts: () => usedAccountIds(this.deps.config) });
         items = (await client.listAccounts(AbortSignal.timeout(12_000))).items ?? [];
       } catch {
         items = null;

@@ -10,7 +10,7 @@ import {
   type SearchProfile,
 } from '../../../../shared/leadSearch.js';
 import { AUTH_FOUNDER_IDS, defaultFounderName, type AuthFounderId } from '../../../../shared/auth.js';
-import type { Config } from '../../config.js';
+import { usedAccountIds, type Config } from '../../config.js';
 import { randomBetween, sleep } from '../../lib/sleep.js';
 import type { AccountPrefsStore } from '../../linkedin/accountPrefs.js';
 import { FOUNDER_SCRAPE_LIMITS, MemoryAccountUsage, UNIPILE_LIMITS, type AccountUsage } from '../../linkedin/accountUsage.js';
@@ -1332,7 +1332,7 @@ export function createLiveAdapter(
   config: Config,
   overrides: { fetch?: typeof fetch; pause?: PauseFn; anthropicBaseURL?: string; metaBaseURL?: string; now?: () => Date; usage?: AccountUsage } = {},
 ) {
-  const unipile = new UnipileClient({ dsn: config.unipile.dsn ?? '', apiKey: config.unipile.apiKey ?? '', fetch: overrides.fetch });
+  const unipile = new UnipileClient({ dsn: config.unipile.dsn ?? '', apiKey: config.unipile.apiKey ?? '', fetch: overrides.fetch, onlyAccounts: () => usedAccountIds(config) });
   // Ohne Anthropic-Schlüssel läuft die Suche trotzdem – die Leads bleiben dann „nicht bewertet“.
   const qualifier = config.anthropic.apiKey
     ? new AnthropicQualifier({ apiKey: config.anthropic.apiKey, model: config.anthropic.model, baseURL: overrides.anthropicBaseURL })

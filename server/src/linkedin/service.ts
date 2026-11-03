@@ -14,7 +14,7 @@ import type {
 } from '../../../shared/linkedin.js';
 import { UNIPILE_SESSION_DOWN_TEXT, UnipileClient, UnipileHttpError, UnipileNetworkError, isUnipileSessionDown, type UnipileAccount, type UnipileChat } from '../adapters/live/unipileClient.js';
 import { currentPosition, distanceOf, pickLinkedinAccount } from '../adapters/live/liveAdapter.js';
-import { SHARED_ACCOUNT_MESSAGE, sharedLinkedInAccount, type Config } from '../config.js';
+import { SHARED_ACCOUNT_MESSAGE, sharedLinkedInAccount, usedAccountIds, type Config } from '../config.js';
 import type { Database } from '../db/database.js';
 import { DuplicateEventError, InvalidTransitionError, LeadNotFoundError, assertTransition, type ContactProfile, type ImportedMessage, type LeadStore } from '../leads/leadStore.js';
 import { randomBetween, sleep } from '../lib/sleep.js';
@@ -143,7 +143,7 @@ export class LinkedInService {
     const { dsn, apiKey } = this.deps.config.unipile;
     if (this.deps.config.mode !== 'live' || !dsn || !apiKey) return null;
     const key = `${dsn}|${apiKey}`;
-    if (this.client?.key !== key) this.client = { key, client: new UnipileClient({ dsn, apiKey, fetch: this.deps.fetch, timeoutMs: 30_000 }) };
+    if (this.client?.key !== key) this.client = { key, client: new UnipileClient({ dsn, apiKey, fetch: this.deps.fetch, timeoutMs: 30_000, onlyAccounts: () => usedAccountIds(this.deps.config) }) };
     return this.client.client;
   }
 
@@ -464,7 +464,7 @@ export class LinkedInService {
     if (!dsn || !apiKey) {
       throw new LinkedInError('linkedin_off', 409, 'Unipile ist nicht eingerichtet – trag Adresse und Token unter Einstellungen → LinkedIn (Unipile) ein.');
     }
-    return new UnipileClient({ dsn, apiKey, fetch: this.deps.fetch, timeoutMs: 30_000 });
+    return new UnipileClient({ dsn, apiKey, fetch: this.deps.fetch, timeoutMs: 30_000, onlyAccounts: () => usedAccountIds(this.deps.config) });
   }
 
   private testAccount(founder: AuthFounderId): string {
@@ -1009,7 +1009,7 @@ export class LinkedInService {
     if (config.mode === 'mock') {
       // Simulation: ohne UNIPILE_ACCOUNT_ID sucht der erste Account.
       const search = config.unipile.accountId ?? MOCK_UNIPILE_ACCOUNTS[0].id;
-      return this.withPrefs(MOCK_UNIPILE_ACCOUNTS.map((account) => ({ ...account, assignedTo: assigned(account.id), searching: account.id === search, warmup: config.linkedin.warmupAccounts.includes(account.id) })));
+      return this.withPrefs(MOCK_UNIPILE_ACCOUNTS.map((account) => ({ ...account, assignedTo: assigned(account.id), searching: account.id === search, warmup: config.linkedin.warmupAccounts.includes(account.id), used: usedAccountIds(config).length === 0 || usedAccountIds(config).includes(account.id) })));
     }
     const { dsn, apiKey } = config.unipile;
     if (!dsn || !apiKey) {
@@ -1018,7 +1018,8 @@ export class LinkedInService {
     let items: UnipileAccount[];
     try {
       const client = new UnipileClient({ dsn, apiKey, fetch: this.deps.fetch, timeoutMs: 20_000 });
-      items = (await client.listAccounts(AbortSignal.timeout(25_000))).items ?? [];
+      // Alle Accounts (auch nicht genutzte), damit man sie unter Einstellungen freigeben kann.
+      items = (await client.listAccounts(AbortSignal.timeout(25_000), { all: true })).items ?? [];
     } catch (error) {
       this.deps.log.warn({ error: error instanceof UnipileHttpError ? `HTTP ${error.status}` : error instanceof Error ? error.name : 'Fehler' }, 'Unipile-Accounts nicht abrufbar');
       const rejected = error instanceof UnipileHttpError && (error.status === 401 || error.status === 403);
@@ -1029,7 +1030,8 @@ export class LinkedInService {
       );
     }
     // Derselbe Such-Account wie in der Lead-Suche (UNIPILE_ACCOUNT_ID, sonst die automatische Wahl).
-    const search = pickLinkedinAccount(items, config.unipile.accountId, config.unipile.searchApi)?.id ?? null;
+    const used = usedAccountIds(config);
+    const search = pickLinkedinAccount(used.length > 0 ? items.filter((account) => used.includes(account.id ?? '')) : items, config.unipile.accountId, config.unipile.searchApi)?.id ?? null;
     return this.withPrefs(items
       .filter((account) => typeof account.id === 'string' && account.id && (account.type ?? '').toUpperCase() === 'LINKEDIN')
       .map((account) => ({
@@ -1038,6 +1040,7 @@ export class LinkedInService {
         assignedTo: assigned(account.id!),
         searching: account.id === search,
         warmup: config.linkedin.warmupAccounts.includes(account.id!),
+        used: used.length === 0 || used.includes(account.id!),
       })));
   }
 
