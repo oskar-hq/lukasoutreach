@@ -683,6 +683,7 @@ Einstellungen → LinkedIn neu zuordnen.
 | `UNIPILE_ACCOUNT_ID` | Account, der beim Scrapen **zuerst** drankommt – bei `UNIPILE_SEARCH_API=sales_navigator` der Account **mit** Sales Navigator |
 | `UNIPILE_ACCOUNT_NICK` / `UNIPILE_ACCOUNT_JOHANNES` | je Gründer sein eigener Account – nur über diese wird vernetzt und geschrieben |
 | `UNIPILE_WARMUP_ACCOUNTS` | reine Scraping-Accounts, die aufgewärmt werden (siehe unten) – scrapen weiter wie alle anderen |
+| `UNIPILE_ACCOUNTS_USED` | nur diese Unipile-Accounts nutzt das Cockpit (leer = alle). Wichtig, wenn sich mehrere Cockpits einen Unipile-Zugang teilen – in der Software unter Einstellungen → LinkedIn-Accounts per „Nicht nutzen“/„Nutzen“. Gründer- und Aufwärm-Accounts zählen immer dazu |
 
 **Accounts aufwärmen** (seit 21.10.): Neue Scraping-Accounts ohne Kontakte sehen in der Suche fast nur anonyme
 „LinkedIn Mitglied“-Treffer. In Einstellungen → LinkedIn-Accounts per „Aufwärmen“ gewählte Accounts schicken darum zu

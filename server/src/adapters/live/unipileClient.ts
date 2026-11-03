@@ -162,6 +162,12 @@ export interface UnipileClientOptions {
   fetch?: typeof fetch;
   /** Zeitlimit je Anfrage. */
   timeoutMs?: number;
+  /**
+   * Nur diese Accounts zurückgeben (`UNIPILE_ACCOUNTS_USED`, Instanz Lukas 03.11.: derselbe Unipile wie im anderen
+   * Cockpit – dessen Accounts darf dieses Cockpit nie zum Suchen, Lesen oder Senden nehmen). Wird bei jedem Aufruf
+   * gelesen, damit geänderte Einstellungen sofort gelten. Leere Liste = alle.
+   */
+  onlyAccounts?: () => readonly string[];
 }
 
 export class UnipileClient {
@@ -219,8 +225,11 @@ export class UnipileClient {
     return json as T;
   }
 
-  listAccounts(signal: AbortSignal) {
-    return this.request<{ items: UnipileAccount[] }>('GET', '/accounts', { signal });
+  async listAccounts(signal: AbortSignal, { all = false }: { all?: boolean } = {}) {
+    const result = await this.request<{ items: UnipileAccount[] }>('GET', '/accounts', { signal });
+    const only = all ? [] : (this.options.onlyAccounts?.() ?? []);
+    if (only.length === 0 || !Array.isArray(result?.items)) return result;
+    return { ...result, items: result.items.filter((account) => typeof account.id === 'string' && only.includes(account.id)) };
   }
 
   searchParameters(params: { accountId: string; type: string; keywords: string; limit?: number }, signal: AbortSignal) {

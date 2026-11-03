@@ -66,7 +66,7 @@ async function main() {
     case 'konten': {
       const { dsn, apiKey } = config.unipile;
       if (!dsn || !apiKey) fail('UNIPILE_DSN und UNIPILE_API_KEY fehlen in der .env.');
-      const { items } = await new UnipileClient({ dsn, apiKey }).listAccounts(AbortSignal.timeout(30_000));
+      const { items } = await new UnipileClient({ dsn, apiKey }).listAccounts(AbortSignal.timeout(30_000), { all: true });
       const linkedin = items.filter((account) => (account.type ?? '').toUpperCase() === 'LINKEDIN');
       if (!linkedin.length) console.log('Kein LinkedIn-Account bei Unipile verbunden.');
       for (const account of linkedin) {

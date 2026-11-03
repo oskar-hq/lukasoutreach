@@ -219,6 +219,11 @@ export interface LinkedInUnipileAccount {
    * Fehlt bei älteren Backends.
    */
   searching?: boolean;
+  /**
+   * false = dieses Cockpit nutzt den Account nicht (`UNIPILE_ACCOUNTS_USED`, 03.11.: mehrere Cockpits teilen sich einen
+   * Unipile-Zugang). Fehlt bei älteren Backends (= genutzt).
+   */
+  used?: boolean;
 }
 
 export interface LinkedInAccountsResponse {

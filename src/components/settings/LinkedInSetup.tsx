@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, Check, Flame, Send, UserCheck, UserPlus } from 'lucide-react';
+import { ArrowDown, ArrowUp, Ban, Check, Flame, Send, UserCheck, UserPlus } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { FOUNDER_IDS, FOUNDERS } from '../../data/founders';
 import type { AuthFounderId } from '../../../shared/auth';
@@ -29,6 +29,10 @@ interface LinkedInSetupProps {
   saved: Partial<Record<AuthFounderId, string>>;
   /** Aufzuwärmende Accounts (Entwurf, sonst gespeichert) – `UNIPILE_WARMUP_ACCOUNTS`. */
   warmup: string[];
+  /** Accounts, die dieses Cockpit nutzt (Entwurf, sonst gespeichert) – `UNIPILE_ACCOUNTS_USED`, leer = alle. */
+  used: string[];
+  /** Gründer, denen man einen Account geben kann (mit Konto oder schon zugeordnet); fehlt = alle. */
+  founders?: AuthFounderId[];
   /** Test-Nachricht nur über den eigenen Account – null (Admin): kein Test. */
   ownFounder: AuthFounderId | null;
   /** Account-ID für einen Gründer in den Entwurf übernehmen (gespeichert wird unten mit „Speichern“). */
@@ -46,10 +50,10 @@ interface LinkedInSetupProps {
  * Einrichten ohne Server-Befehle: verbundene Accounts aus Unipile laden und per Klick zuordnen (statt
  * `linkedinCli konten`), dann eine Test-Nachricht an den Test-LinkedIn-Account.
  */
-export function LinkedInSetup({ drafts, saved, warmup, ownFounder, onPick, unsaved, manual, manualOpen, onManualToggle }: LinkedInSetupProps) {
+export function LinkedInSetup({ drafts, saved, warmup, used, founders, ownFounder, onPick, unsaved, manual, manualOpen, onManualToggle }: LinkedInSetupProps) {
   return (
     <div className="space-y-12 py-12">
-      <AccountPicker drafts={drafts} saved={saved} warmup={warmup} onPick={onPick} manual={manual} manualOpen={manualOpen} onManualToggle={onManualToggle} />
+      <AccountPicker drafts={drafts} saved={saved} warmup={warmup} used={used} founders={founders} onPick={onPick} manual={manual} manualOpen={manualOpen} onManualToggle={onManualToggle} />
       {ownFounder ? (
         <TestMessage founder={ownFounder} unsaved={unsaved} />
       ) : (
@@ -64,11 +68,13 @@ function AccountPicker({
   drafts,
   saved,
   warmup,
+  used,
+  founders = FOUNDER_IDS,
   onPick,
   manual,
   manualOpen,
   onManualToggle,
-}: Pick<LinkedInSetupProps, 'drafts' | 'saved' | 'warmup' | 'onPick' | 'manual' | 'manualOpen' | 'onManualToggle'>) {
+}: Pick<LinkedInSetupProps, 'drafts' | 'saved' | 'warmup' | 'used' | 'founders' | 'onPick' | 'manual' | 'manualOpen' | 'onManualToggle'>) {
   const [state, setState] = useState<
     { status: 'idle' | 'loading' } | { status: 'ready'; accounts: LinkedInUnipileAccount[] } | { status: 'error'; message: string }
   >({ status: 'idle' });
@@ -105,6 +111,26 @@ function AccountPicker({
   const setWarmup = (accountId: string, on: boolean) => {
     const next = on ? [...warmup.filter((id) => id !== accountId), accountId] : warmup.filter((id) => id !== accountId);
     onPick('UNIPILE_WARMUP_ACCOUNTS', next.join(','));
+  };
+
+  /**
+   * Nutzt dieses Cockpit den Account? (03.11.: mehrere Cockpits mit einem Unipile-Zugang.) Ohne Auswahl alle; Gründer-
+   * und Aufwärm-Accounts immer (wie `usedAccountIds` im Backend).
+   */
+  const isUsed = (accountId: string): boolean =>
+    used.length === 0 || used.includes(accountId) || warmup.includes(accountId) || FOUNDER_IDS.some((founder) => assignment(founder) === accountId);
+
+  /**
+   * Account nutzen/nicht nutzen. Die erste Abwahl macht aus „alle“ eine Liste der übrigen; danach müssen neu bei
+   * Unipile verbundene Accounts bewusst freigegeben werden. Der letzte Account lässt sich nicht abwählen (leer hieße
+   * wieder „alle“).
+   */
+  const setUsed = (accountId: string, on: boolean) => {
+    if (state.status !== 'ready') return;
+    const current = used.length === 0 ? state.accounts.map((account) => account.id) : used;
+    const next = on ? [...current.filter((id) => id !== accountId), accountId] : current.filter((id) => id !== accountId);
+    if (next.length === 0) return;
+    onPick('UNIPILE_ACCOUNTS_USED', next.join(','));
   };
 
   /** Wirksame Zuordnung: ungespeicherter Entwurf → gespeicherter Wert → was das Backend meldet. */
@@ -154,6 +180,13 @@ function AccountPicker({
           So bleiben deren Profil-Grenzen ganz für Personen. Ist für Firmenseiten nichts mehr frei, stoppt die Suche bis morgen.
         </p>
       )}
+      {state.status === 'ready' && state.accounts.length > 1 && used.length === 0 && (
+        <StatusLine tone="warn" className="mt-3 text-[13.5px]" testId="linkedin-all-used">
+          Dieses Cockpit nutzt gerade alle {state.accounts.length} Accounts bei Unipile. Teilst du den Unipile-Zugang mit
+          einem anderen Cockpit, nimm dessen Accounts mit „Nicht nutzen“ heraus und speichere – sonst gelten ihre
+          LinkedIn-Grenzen doppelt.
+        </StatusLine>
+      )}
       {state.status === 'ready' &&
         (state.accounts.length === 0 ? (
           <p className="mt-3 text-[13.5px] text-ink-2">Bei Unipile ist noch kein LinkedIn-Account verbunden. Verbinde ihn im Unipile-Dashboard.</p>
@@ -163,6 +196,30 @@ function AccountPicker({
               const place = state.accounts.findIndex((other) => other.id === account.id);
               // Gründer-Account ohne Platz: scrapt zuletzt, bis er einmal verschoben wird.
               const founderLast = account.assignedTo !== null && (account.position ?? null) === null;
+              const inUse = isUsed(account.id);
+              // Abwählbar nur, was nicht ohnehin fest eingetragen ist (Gründer, Aufwärmen) – und nie der letzte.
+              const fixed = warmup.includes(account.id) || FOUNDER_IDS.some((founder) => assignment(founder) === account.id);
+              const usedCount = state.accounts.filter((other) => isUsed(other.id)).length;
+              if (!inUse) {
+                return (
+                  <li key={account.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-2" data-testid="linkedin-account" data-unused="true">
+                    <div className="min-w-0 opacity-50">
+                      <p className="text-[13px] font-semibold text-ink">{account.name}</p>
+                      <p className="truncate text-[11px] text-ink-3">Nicht in diesem Cockpit · ID {account.id}</p>
+                    </div>
+                    <button
+                      type="button"
+                      aria-pressed={false}
+                      onClick={() => setUsed(account.id, true)}
+                      className={cn('inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-colors', 'border-line-strong text-ink-2 hover:border-white/25 hover:text-ink')}
+                      data-testid="linkedin-use"
+                    >
+                      <Check className="h-3.5 w-3.5" aria-hidden />
+                      Nutzen
+                    </button>
+                  </li>
+                );
+              }
               return (
               <li key={account.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-2" data-testid="linkedin-account">
                 <div className="min-w-0">
@@ -174,7 +231,7 @@ function AccountPicker({
                   {warmup.includes(account.id) && <WarmupLine status={warmupStatus} accountId={account.id} />}
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {FOUNDER_IDS.map((founder) => {
+                  {founders.map((founder) => {
                     const active = assignment(founder) === account.id;
                     // Ein Account gehört nur einem Gründer – sonst gälten seine LinkedIn-Grenzen doppelt.
                     const otherFounder = FOUNDER_IDS.find((other) => other !== founder && assignment(other) === account.id);
@@ -216,6 +273,18 @@ function AccountPicker({
                     >
                       {warmup.includes(account.id) ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Flame className="h-3.5 w-3.5" aria-hidden />}
                       {warmup.includes(account.id) ? 'Wird aufgewärmt' : 'Aufwärmen'}
+                    </button>
+                  )}
+                  {!fixed && usedCount > 1 && (
+                    <button
+                      type="button"
+                      title="Dieses Cockpit ignoriert den Account dann ganz – keine Suche, kein Profil-Lesen, kein Senden."
+                      onClick={() => setUsed(account.id, false)}
+                      className={cn('inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-colors', 'border-line-strong text-ink-2 hover:border-white/25 hover:text-ink')}
+                      data-testid="linkedin-unuse"
+                    >
+                      <Ban className="h-3.5 w-3.5" aria-hidden />
+                      Nicht nutzen
                     </button>
                   )}
                 </div>
