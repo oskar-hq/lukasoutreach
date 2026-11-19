@@ -497,6 +497,9 @@ Deal Value ändern (`shared/mcp.ts`, Code `server/src/mcp/`).
   Einstellungen → Vorlagen. Eigene Platzhalter aus freien Feldern: unter Einstellungen → Tagesstapel → „Freie Felder der
   Leads“ (`LEAD_FIELDS`, z. B. `welle, testgruppe, aufhaenger`) eintragen, dann ist `{{aufhaenger}}` erlaubt und wird aus
   dem Lead gefüllt; `{{kategorie}}` gibt es immer.
+- **Eigene Kategorien und Felder (19.11.):** Einstellungen → Tagesstapel → „Eigene Kategorien“ (`LEAD_CATEGORY_LIST`,
+  z. B. `startup_gruender, vc_platform`). `find_leads` und `read_conversations` filtern nach `category` und `fields`
+  (z. B. `{"testgruppe": "B"}`), `outreach_analysis` wertet mit `group_by: ["testgruppe"]` je Feldwert aus.
 - **Trennen:** im selben Dialog („Trennen“) – das Token ist sofort ungültig. Zugriffstokens gelten 8 h, Claude erneuert
   sie selbst (bis 90 Tage ohne Nutzung).
 - **Voraussetzung:** öffentlich per https erreichbar (Caddy) und `PUBLIC_URL` gesetzt. nginx leitet `/mcp` und

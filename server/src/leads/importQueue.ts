@@ -250,7 +250,7 @@ export class LeadImportQueue {
     if (!created) return { status: 'duplicate', lead, message: `${name(lead)} gibt es schon – unter „${LEAD_STAGE_LABELS[lead.stage]}“.` };
     this.deps.connections?.recordContactInvite(owner, lead, lead.createdAt);
     const fields: Record<string, string> = { ...(item.fields ?? {}) };
-    if (item.category) fields[LEAD_CATEGORY_FIELD] = item.category;
+    if (item.category) fields[LEAD_CATEGORY_FIELD] = item.category.trim().toLowerCase();
     let current = lead;
     if (Object.keys(fields).length) current = this.deps.leads.setFields(lead.id, fields, owner, now, actor);
     if (item.note) current = this.deps.leads.applyAction(lead.id, { action: 'note', text: item.note }, owner, now, undefined, actor);

@@ -69,6 +69,8 @@ export interface Config {
   onePerCompany: boolean;
   /** Freie Felder der Leads (`LEAD_FIELDS`, Komma-Liste) – Platzhalter in Vorlagen; `kategorie` kommt immer dazu. */
   leadFields: string[];
+  /** Eigene Kategorien (`LEAD_CATEGORY_LIST`, Komma-Liste); leer = jede erlaubt. */
+  leadCategories: string[];
   /** Tagesstapel (Vertrag `shared/tasks.ts`). */
   tasks: {
     followUpAfterDays: number;
@@ -355,6 +357,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     },
     minConfidence: Math.min(1, Math.max(0, number(env.QUALIFY_MIN_CONFIDENCE, 0.6))),
     onePerCompany: (text(env.ONE_LEAD_PER_COMPANY) ?? 'on').toLowerCase() !== 'off',
+    leadCategories: [...new Set((text(env.LEAD_CATEGORY_LIST) ?? '').split(',').map((entry) => entry.trim().toLowerCase()).filter((entry) => /^[a-z][a-z0-9_]{0,39}$/.test(entry)))],
     leadFields: [...new Set((text(env.LEAD_FIELDS) ?? '').split(',').map((entry) => entry.trim().toLowerCase()).filter((entry) => /^[a-z][a-z0-9_]{0,39}$/.test(entry)))],
     tasks: {
       followUpAfterDays: Math.max(1, Math.floor(number(env.FOLLOWUP_AFTER_DAYS, 2))),

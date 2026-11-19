@@ -33,6 +33,8 @@ export interface McpContext {
   data: AssistantData;
   /** Adresse des Cockpits für Lead-Links, z. B. https://lukas.ylvalabs.de */
   baseUrl: string;
+  /** Eigene Kategorien (`LEAD_CATEGORY_LIST`); leer = nur die KI-Kategorien bekannt. */
+  categories?: readonly string[];
 }
 
 const INSTRUCTIONS = `Outreach-Cockpit eines kleinen Teams, das über LinkedIn Kapitalanlage-Vertriebe und Finanzdienstleister anschreibt (früher auch Bauträger). Ablauf je Lead: Vernetzungsanfrage → Erstnachricht → Follow-ups → Antwort → Termin.
@@ -61,6 +63,18 @@ const SEND = { readOnlyHint: false, destructiveHint: true, idempotentHint: false
 export function createMcpServer(ctx: McpContext): McpServer {
   const server = new McpServer({ name: 'outreach-cockpit', version: '1.0.0' }, { instructions: INSTRUCTIONS });
   const { app, user, scope, data, baseUrl } = ctx;
+  const known = [...(ctx.categories ?? []), ...LEAD_CATEGORIES];
+  const categoryField = z
+    .string()
+    .trim()
+    .min(1)
+    .max(80)
+    .optional()
+    .describe(`Kategorie: eigene (Feld „kategorie“) oder KI-Kategorie. Bekannt: ${known.join(', ')}`);
+  const fieldsFilter = z
+    .record(z.string().regex(/^[a-z][a-z0-9_]{0,39}$/), z.string().max(500))
+    .optional()
+    .describe('Nur Leads, deren freie Felder genau diese Werte haben, z. B. {"welle": "1", "testgruppe": "B"}');
 
   /** Lead-Links der Datenschicht (`lead:<id>`) auf Adressen im Cockpit umschreiben – klickbar in der Claude-App. */
   const links = (text: string) => text.replace(/\]\(lead:([^)\s]+)\)/g, (_match, id: string) => `](${baseUrl}/?${MCP_LEAD_PARAM}=${encodeURIComponent(id)}) (lead_id: ${id})`);
@@ -144,10 +158,15 @@ export function createMcpServer(ctx: McpContext): McpServer {
     {
       title: 'Outreach-Auswertung',
       description:
-        'Vorab gerechnete Auswertung über alle Leads: Trichter, erste Antwort je Position in der Sequenz (Erstnachricht, 2., 3. Nachricht …), je Vorlage, Länge, Frage am Ende, Wochentag, Uhrzeit, Kategorie, Gründer. Das Warum steht in den Gesprächen (read_conversations).',
+        'Vorab gerechnete Auswertung über alle Leads: Trichter, erste Antwort je Position in der Sequenz (Erstnachricht, 2., 3. Nachricht …), je Vorlage, Länge, Frage am Ende, Wochentag, Uhrzeit, Kategorie, Gründer – mit group_by zusätzlich je freiem Feld (z. B. ["testgruppe"], um Einstiege gegeneinander zu testen). Mit category/fields eingrenzen. Das Warum steht in den Gesprächen (read_conversations).',
+      inputSchema: {
+        group_by: z.array(z.string().regex(/^[a-z][a-z0-9_]{0,39}$/)).max(5).optional().describe('Freie Felder, nach denen zusätzlich ausgewertet wird'),
+        category: categoryField,
+        fields: fieldsFilter,
+      },
       annotations: READ,
     },
-    async () => ok(links(data.analysis(scope))),
+    async ({ group_by, category, fields }) => ok(links(data.analysis(scope, { groupBy: group_by, category, fields }))),
   );
 
   // Optimierungs-Bericht (Wunsch des Nutzers 09.11.: „hol dir den Bericht selbst, wenn du ihn brauchst“).
@@ -218,8 +237,9 @@ export function createMcpServer(ctx: McpContext): McpServer {
       description: `Ganze Gesprächsverläufe vieler Leads auf einmal (beide Richtungen, Position in der Sequenz, Vorlage, Zeitpunkte, Ergebnis), neueste zuerst. Bis ${CONVERSATIONS_MAX_LIMIT} je Aufruf, blättern mit offset.`,
       inputSchema: {
         outcome: z.enum(['all', 'replied', 'no_reply', 'interested', 'not_interested', 'meeting', 'lost']).optional(),
-        category: z.enum(LEAD_CATEGORIES).optional(),
+        category: categoryField,
         owner: z.enum(AUTH_FOUNDER_IDS).optional(),
+        fields: fieldsFilter,
         offset: z.number().int().min(0).optional(),
         limit: z.number().int().min(1).max(CONVERSATIONS_MAX_LIMIT).optional(),
       },
@@ -243,11 +263,12 @@ export function createMcpServer(ctx: McpContext): McpServer {
     'find_leads',
     {
       title: 'Leads suchen',
-      description: 'Leads nach Name, Firma oder Position, optional nach Stufe und Kategorie.',
+      description: 'Leads nach Name, Firma oder Position, optional nach Stufe, Kategorie und freien Feldern (Welle, Testgruppe …). Freie Felder stehen am Ende jeder Zeile.',
       inputSchema: {
         query: z.string().trim().max(200).optional(),
         stage: z.enum(LEAD_STAGES).optional(),
-        category: z.enum(LEAD_CATEGORIES).optional(),
+        category: categoryField,
+        fields: fieldsFilter,
         limit: z.number().int().min(1).max(100).optional(),
       },
       annotations: READ,

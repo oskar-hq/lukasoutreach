@@ -417,3 +417,43 @@ test('Claude-App: Vorlagen anlegen, ändern, löschen (Lukas-Instanz 19.11.)', a
     await client.close();
   }
 });
+
+test('Claude-App: eigene Kategorien und freie Felder – filtern und auswerten (Lukas-Instanz 19.11.)', async () => {
+  const app = mcpApp({ LEAD_CATEGORY_LIST: 'startup_gruender, vc_platform' });
+  const { cookie, tokens } = await connect(app);
+  const client = await mcpClient(app, tokens.access_token);
+  try {
+    const bad = await client.callTool({ name: 'add_lead', arguments: { profile: 'kat-falsch', category: 'kapitalanlage' } });
+    assert.equal(bad.isError, true);
+    assert.match(textOf(bad), /Unbekannte Kategorie „kapitalanlage“ – erlaubt: startup_gruender, vc_platform/);
+    for (const [profile, category, gruppe] of [['kat-a', 'startup_gruender', 'A'], ['kat-b', 'startup_gruender', 'B'], ['kat-c', 'vc_platform', 'A']]) {
+      assert.match(textOf(await client.callTool({ name: 'add_lead', arguments: { profile, category, fields: { testgruppe: gruppe } } })), /^Angelegt/);
+    }
+    const imported = textOf(await client.callTool({ name: 'import_leads', arguments: { items: [{ profile: 'kat-d', category: 'falsch' }, { profile: 'kat-e', category: 'vc_platform' }] } }));
+    assert.match(imported, /1 eingereiht, 0 Dubletten, 1 Fehler/);
+
+    const founders = textOf(await client.callTool({ name: 'find_leads', arguments: { category: 'startup_gruender' } }));
+    assert.match(founders, /^2 Leads/);
+    assert.match(founders, /kategorie=startup_gruender/);
+    const groupA = textOf(await client.callTool({ name: 'find_leads', arguments: { fields: { testgruppe: 'A' } } }));
+    assert.match(groupA, /^2 Leads/);
+
+    // Erstnachricht eintragen, eine Antwort – dann je Testgruppe auswerten.
+    const leads = (await app.inject({ method: 'GET', url: '/api/leads?limit=500', headers: { cookie } })).json() as LeadListResponse;
+    const byProfile = (id: string) => leads.leads.find((lead) => lead.person.publicIdentifier === id)!;
+    for (const id of ['kat-a', 'kat-b']) {
+      const lead = byProfile(id);
+      assert.ok(lead, id);
+      await client.callTool({ name: 'send_message', arguments: { lead_id: lead.id, text: 'Hallo!', only_record: true } });
+    }
+    await client.callTool({ name: 'record_reply', arguments: { lead_id: byProfile('kat-a').id, text: 'Gern!' } });
+    const analysis = textOf(await client.callTool({ name: 'outreach_analysis', arguments: { group_by: ['testgruppe'], category: 'startup_gruender' } }));
+    assert.match(analysis, /## Nach Feld „testgruppe“/);
+    assert.match(analysis, /\| A \| 1 \| 1 \(100 %\)/);
+    assert.match(analysis, /\| B \| 1 \| 0 \(0 %\)/);
+    const conversations = textOf(await client.callTool({ name: 'read_conversations', arguments: { fields: { testgruppe: 'B' } } }));
+    assert.match(conversations, /von 1 \(Filter: all, testgruppe=B\)/);
+  } finally {
+    await client.close();
+  }
+});

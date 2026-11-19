@@ -1,6 +1,6 @@
 import type { AuthFounderId } from '../../../shared/auth.js';
 import { AUTH_FOUNDER_IDS, defaultFounderName } from '../../../shared/auth.js';
-import { CATEGORY_LABELS, type LeadCategory } from '../../../shared/leadSearch.js';
+import { CATEGORY_LABELS } from '../../../shared/leadSearch.js';
 import { LEAD_STAGE_LABELS, type CockpitLead, type LeadStage } from '../../../shared/leads.js';
 import type { Database } from '../db/database.js';
 import type { LeadStore } from '../leads/leadStore.js';
@@ -64,7 +64,19 @@ const oneLine = (text: string) => text.replace(/\s+/g, ' ').trim();
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)} … [gekürzt, ${text.length} Zeichen]` : text);
 const nameOf = (lead: CockpitLead) => `${lead.person.firstName} ${lead.person.lastName}`.trim();
 const linkOf = (lead: CockpitLead) => `[${nameOf(lead)}](lead:${lead.id})`;
-const categoryOf = (lead: CockpitLead) => (lead.assessment ? CATEGORY_LABELS[lead.assessment.category] : 'ohne Kategorie');
+// Eigene Kategorie aus dem freien Feld `kategorie` (Lukas-Instanz 19.11.) geht vor der KI-Einstufung.
+const categoryOf = (lead: CockpitLead) => lead.fields?.kategorie || (lead.assessment ? CATEGORY_LABELS[lead.assessment.category] : 'ohne Kategorie');
+/** Kategorie passt: KI-Kategorie (z. B. „kapitalanlage_vertrieb“) oder eigene im Feld `kategorie` (z. B. „vc_platform“). */
+const matchesCategory = (lead: CockpitLead, category: string | null | undefined) =>
+  !category || lead.assessment?.category === category || lead.fields?.kategorie === category;
+/** Alle angegebenen Felder haben genau diesen Wert (Groß-/Kleinschreibung egal); leerer Wert = Feld fehlt. */
+const matchesFields = (lead: CockpitLead, fields: Record<string, string> | null | undefined) =>
+  !fields ||
+  Object.entries(fields).every(([key, value]) => (lead.fields?.[key] ?? '').trim().toLowerCase() === value.trim().toLowerCase());
+const fieldsText = (lead: CockpitLead) => {
+  const entries = Object.entries(lead.fields ?? {});
+  return entries.length ? ` · ${entries.map(([key, value]) => `${key}=${value.length > 60 ? `${value.slice(0, 57)}…` : value}`).join(', ')}` : '';
+};
 
 function median(values: number[]): number | null {
   if (!values.length) return null;
@@ -135,8 +147,8 @@ export class AssistantData {
    * Länge, Frage am Ende, Wochentag/Uhrzeit, Kategorie, Gründer, Notiz zur Anfrage. „Antwort nach Nachricht n“ = die
    * erste Antwort des Leads kam nach der n-ten eigenen Nachricht und vor der nächsten.
    */
-  analysis(scope: AuthFounderId[] | null): string {
-    const threads = this.threads(scope);
+  analysis(scope: AuthFounderId[] | null, options: { groupBy?: readonly string[]; category?: string | null; fields?: Record<string, string> | null } = {}): string {
+    const threads = this.threads(scope).filter((thread) => matchesCategory(thread.lead, options.category) && matchesFields(thread.lead, options.fields));
     const contacted = threads.filter((thread) => thread.messages.some((message) => message.dir === 'out'));
     const lines: string[] = [];
     const replied = contacted.filter((thread) => thread.messages.some((message) => message.dir === 'in'));
@@ -232,6 +244,8 @@ export class AssistantData {
     };
     group('Nach Kategorie', (thread) => categoryOf(thread.lead));
     group('Nach Gründer (Besitzer des Leads)', (thread) => defaultFounderName(thread.lead.owner));
+    // Freie Felder (Lukas-Instanz 19.11.): z. B. drei Einstiege gegeneinander testen (Feld „testgruppe“).
+    for (const field of options.groupBy ?? []) group(`Nach Feld „${field}“`, (thread) => thread.lead.fields?.[field] || '(leer)');
 
     // Einschätzung der letzten Antwort.
     const intents = new Map<string, number>();
@@ -251,12 +265,12 @@ export class AssistantData {
 
   conversations(
     scope: AuthFounderId[] | null,
-    options: { outcome?: ConversationOutcome; category?: LeadCategory | null; owner?: AuthFounderId | null; offset?: number; limit?: number },
+    options: { outcome?: ConversationOutcome; category?: string | null; owner?: AuthFounderId | null; fields?: Record<string, string> | null; offset?: number; limit?: number },
   ): { text: string; count: number; total: number } {
     const outcome = options.outcome ?? 'all';
     const matches = this.threads(scope)
       .filter((thread) => thread.messages.length > 0 || thread.inviteNote)
-      .filter((thread) => !options.category || thread.lead.assessment?.category === options.category)
+      .filter((thread) => matchesCategory(thread.lead, options.category) && matchesFields(thread.lead, options.fields))
       .filter((thread) => !options.owner || thread.lead.owner === options.owner)
       .filter((thread) => {
         const hasReply = thread.messages.some((message) => message.dir === 'in');
@@ -282,7 +296,7 @@ export class AssistantData {
     const limit = Math.min(CONVERSATIONS_MAX_LIMIT, Math.max(1, options.limit ?? 50));
     const page = matches.slice(offset, offset + limit);
     const header =
-      `Gespräche ${page.length ? offset + 1 : 0}–${offset + page.length} von ${matches.length} (Filter: ${outcome}${options.category ? `, ${CATEGORY_LABELS[options.category]}` : ''}${options.owner ? `, ${defaultFounderName(options.owner)}` : ''}). ` +
+      `Gespräche ${page.length ? offset + 1 : 0}–${offset + page.length} von ${matches.length} (Filter: ${outcome}${options.category ? `, ${(CATEGORY_LABELS as Record<string, string>)[options.category] ?? options.category}` : ''}${options.fields ? `, ${Object.entries(options.fields).map(([key, value]) => `${key}=${value}`).join(', ')}` : ''}${options.owner ? `, ${defaultFounderName(options.owner)}` : ''}). ` +
       (offset + page.length < matches.length ? `Weitere mit offset=${offset + page.length}.` : 'Das sind alle.') +
       '\n→ = eigene Nachricht (#n = Position in der Sequenz, Vorlage), ← = Antwort des Leads.';
     return { text: [header, ...page.map((thread) => this.transcript(thread, BATCH_MESSAGE_CHARS))].join('\n\n'), count: page.length, total: matches.length };
@@ -331,7 +345,7 @@ export class AssistantData {
   }
 
   /** Leads nach Name, Firma, Position (wie die Suche in der Leads-Ansicht), optional Stufe und Kategorie. */
-  findLeads(scope: AuthFounderId[] | null, options: { query?: string; stage?: LeadStage | null; category?: LeadCategory | null; limit?: number }): string {
+  findLeads(scope: AuthFounderId[] | null, options: { query?: string; stage?: LeadStage | null; category?: string | null; fields?: Record<string, string> | null; limit?: number }): string {
     const owners = scope ?? [...AUTH_FOUNDER_IDS];
     const limit = Math.min(FIND_MAX_LIMIT, Math.max(1, options.limit ?? 30));
     const found = owners
@@ -340,16 +354,16 @@ export class AssistantData {
           owner,
           query: options.query,
           stages: options.stage ? [options.stage] : undefined,
-          categories: options.category ? [options.category] : undefined,
           sort: 'recent',
           limit: 1_000_000,
         }).leads,
       )
+      .filter((lead) => matchesCategory(lead, options.category) && matchesFields(lead, options.fields))
       .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
     if (!found.length) return 'Keine passenden Leads.';
     const lines = found
       .slice(0, limit)
-      .map((lead) => `- ${linkOf(lead)} · ${lead.company.name} · ${lead.person.position || lead.person.headline} · ${categoryOf(lead)} · Stufe ${LEAD_STAGE_LABELS[lead.stage]} · zuletzt aktiv ${day(lead.lastActivityAt)} · ${defaultFounderName(lead.owner)}`);
+      .map((lead) => `- ${linkOf(lead)} · ${lead.company.name} · ${lead.person.position || lead.person.headline} · ${categoryOf(lead)} · Stufe ${LEAD_STAGE_LABELS[lead.stage]} · zuletzt aktiv ${day(lead.lastActivityAt)} · ${defaultFounderName(lead.owner)}${fieldsText(lead)}`);
     return [`${found.length} ${found.length === 1 ? 'Lead' : 'Leads'}${found.length > limit ? ` (die ${limit} zuletzt aktiven)` : ''}:`, ...lines].join('\n');
   }
 

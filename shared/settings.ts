@@ -191,6 +191,7 @@ export const SETTING_KEYS = [
   'FOLLOWUP_AFTER_DAYS',
   'MAX_FOLLOW_UPS',
   'LEAD_FIELDS',
+  'LEAD_CATEGORY_LIST',
   'NEW_LEADS_PER_DAY',
   'INVITE_STALE_DAYS',
   'LOST_DELETE_DAYS',
@@ -564,6 +565,15 @@ export const SETTINGS: readonly SettingDefinition[] = [
     group: 'tasks',
     label: 'Freie Felder der Leads',
     help: 'Komma-Liste, z. B. „welle, testgruppe, fit, aufhaenger, firma_stage“. Jedes Feld ist in Vorlagen als Platzhalter nutzbar ({{aufhaenger}}) und wird aus dem Lead gefüllt. „kategorie“ gibt es immer.',
+    type: 'text',
+    pattern: '^\\s*([a-z][a-z0-9_]{0,39}\\s*(,\\s*[a-z][a-z0-9_]{0,39}\\s*)*)?$',
+  },
+  {
+    // Lukas-Instanz 19.11.: eigene Kategorien statt der festen Finanz-Kategorien.
+    key: 'LEAD_CATEGORY_LIST',
+    group: 'tasks',
+    label: 'Eigene Kategorien',
+    help: 'Komma-Liste, z. B. „startup_gruender, startup_marketing, vc_platform, vc_partner, sonstiges“. Steht im Feld „kategorie“ der Leads; Claude filtert und wertet danach aus. Leer = jede Kategorie erlaubt.',
     type: 'text',
     pattern: '^\\s*([a-z][a-z0-9_]{0,39}\\s*(,\\s*[a-z][a-z0-9_]{0,39}\\s*)*)?$',
   },

@@ -3,6 +3,10 @@
 > Nur der Backend-Agent schreibt hier. Kurz halten, bei jedem Push aktualisieren, Erledigtes nach einer Woche löschen.
 
 ## Woran ich arbeite
+- **`claude/exciting-planck-euf6bn` (19.11., Lukas Punkte 4+6)** – Einstellung `LEAD_CATEGORY_LIST` (eigene Kategorien,
+  Feld `kategorie`, Import prüft dagegen). MCP `find_leads`/`read_conversations`: `category` frei (eigene oder KI),
+  `fields`-Filter; `outreach_analysis`: `group_by` (freie Felder), `category`, `fields`. `categoryOf` nimmt `kategorie` vor
+  der KI-Einstufung. Test `mcp.test.ts`.
 - **`claude/exciting-planck-euf6bn` (19.11., Lukas Punkt 3)** – Vorlagen per MCP: `mcp/templateTools.ts` (`create_template`,
   `update_template`, `delete_template`, `template_placeholders`), `list_templates` mit Kategorie und Platzhaltern.
   Einstellung `LEAD_FIELDS` (Komma-Liste) → `TemplatesResponse.fieldPlaceholders` (+ immer `kategorie`), erlaubte
