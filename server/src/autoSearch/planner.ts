@@ -22,7 +22,7 @@ import type { Database } from '../db/database.js';
 import { RunBusyError, checkedIds, type Logger, type PipelineRunner } from '../pipeline/runner.js';
 import type { RunStore } from '../pipeline/runStore.js';
 import { AutoSearchStore } from './store.js';
-import { dueSlotAny, localClock, nextRunAtAny } from './time.js';
+import { dueSlotRandom, localClock, nextRunAtRandom } from './time.js';
 
 /** Uhrzeiten eines Plans: `time` und – falls gesetzt – `secondTime`. */
 function timesOf(plan: { time: string; secondTime?: string | null }): string[] {
@@ -47,6 +47,9 @@ function timesOf(plan: { time: string; secondTime?: string | null }): string[] {
  *     31.10. raus (Wunsch des Nutzers). Der Runner meldet weiter jeden Profilabruf (`countProfileFetch`) – nur zum Anzeigen.
  *   - Wartende Termine stehen auch in der Datenbank (`pending`): Nach einem Neustart werden sie als übersprungen
  *     gemeldet statt still zu verschwinden.
+ *   - Eingereihte Folgeläufe fürs Tagesziel stehen ebenfalls in der Datenbank (`follow_up`, 10.11.): Nach einem
+ *     Neustart am selben Tag (Update in der Pause zwischen zwei Läufen) geht die Suche weiter. Bis dahin war nach
+ *     jedem Update still Schluss für den Tag – ohne Grund im Zeitplan (10.11.: 1 Lauf, 4 statt 40 Leads).
  *   - Kein Fehler darf den Planer beenden: alles wird gefangen und ohne Geheimnisse geloggt.
  */
 
@@ -66,6 +69,8 @@ const euro = (value: number) => `${value.toLocaleString('de-DE', { minimumFracti
 export const AUTO_SEARCH_TICK_MS = 20_000;
 
 const MINUTE_MS = 60_000;
+/** Ein nach dem Neustart wieder eingereihter Folgelauf startet frühestens so lange nach dem Start des Servers. */
+const RESUME_PAUSE_MS = MINUTE_MS;
 
 export const AUTO_SEARCH_MESSAGES = {
   skipped: `Übersprungen: Es lief gerade eine andere Suche, und sie war auch nach ${AUTO_SEARCH_WAIT_MINUTES} Minuten Warten nicht fertig.`,
@@ -83,6 +88,20 @@ export const AUTO_SEARCH_MESSAGES = {
   budget: (budget: number) =>
     `Übersprungen: Das KI-Tagesbudget von ${euro(budget)} ist heute aufgebraucht. Morgen geht es weiter – das Budget stellst du unter Einstellungen → Automatische Suche ein.`,
 } as const;
+
+/**
+ * Pause vor dem nächsten Lauf fürs Tagesziel in Minuten: ohne Zufall `AUTO_SEARCH_FOLLOW_UP_PAUSE_MINUTES`, mit
+ * `randomMinutes` zufällig zwischen dieser Pause und `randomMinutes` (06.11.).
+ */
+export function followUpPauseMinutes(randomMinutes: number | null | undefined, random: () => number = Math.random): number {
+  const min = AUTO_SEARCH_FOLLOW_UP_PAUSE_MINUTES;
+  const max = Math.max(min, Math.floor(randomMinutes ?? 0));
+  return max <= min ? min : min + Math.floor(random() * (max - min + 1));
+}
+
+/** Fehlgeschlagener Lauf (Account/Unipile ausgefallen): so oft am Tag neu versuchen, mit dieser Pause. */
+export const AUTO_SEARCH_FAILED_RETRIES = 2;
+export const AUTO_SEARCH_FAILED_RETRY_MINUTES = 30;
 
 /** Gründe für `AutoSearchToday.stopReason`: warum heute kein weiterer Lauf fürs Tagesziel kommt. */
 export const AUTO_SEARCH_STOP = {
@@ -130,6 +149,8 @@ export interface AutoSearchDeps {
   unipileDown?: () => boolean;
   log: Logger;
   /** Uhr – in Tests eine Fake-Uhr. */
+  /** Zufall für die Pausen zwischen den Läufen (Tests: fest). */
+  random?: () => number;
   now?: () => number;
   /**
    * Nach jedem Lauf mit Ergebnis (auch ohne gestarteten Lauf) – für Neuigkeiten (`shared/notifications.ts`).
@@ -158,6 +179,8 @@ export class AutoSearchPlanner {
    * Klick (Leads und Läufe des Tages zu diesem Zeitpunkt), damit ein schon erreichtes Tagesziel nicht sofort stoppt.
    */
   private readonly manualChains = new Map<AuthFounderId, { day: string; created: number; rounds: number }>();
+  /** Neue Versuche nach fehlgeschlagenen Läufen je „Gründer|Tag“ (`AUTO_SEARCH_FAILED_RETRIES`). */
+  private readonly failedRetries = new Map<string, number>();
 
   constructor(private readonly deps: AutoSearchDeps) {
     this.store = new AutoSearchStore(deps.db);
@@ -168,7 +191,8 @@ export class AutoSearchPlanner {
   /**
    * Nach einem Neustart: Läufe und Warteschlange sind nur im Speicher. Steht ein Lauf noch auf `running`, den der
    * Server nicht mehr kennt (Absturz, Deploy während der Suche), wird er als `failed` abgeschlossen. Wartete ein
-   * fälliger Termin noch auf seinen Start, wird er als `skipped` gemeldet (nicht nachgeholt).
+   * fälliger Termin noch auf seinen Start, wird er als `skipped` gemeldet (nicht nachgeholt). Ein eingereihter
+   * Folgelauf fürs Tagesziel (`follow_up`) wird am selben Tag fortgesetzt (10.11.).
    */
   private recover(): void {
     for (const founder of AUTH_FOUNDER_IDS) {
@@ -176,8 +200,12 @@ export class AutoSearchPlanner {
         const last = this.store.lastRun(founder);
         if (last?.status === 'running' && !(last.runId && this.deps.runs.get(last.runId))) {
           this.store.setLastRun(founder, { ...last, status: 'failed', finishedAt: this.now(), message: AUTO_SEARCH_MESSAGES.restarted });
+          // Der Grund gehört auch zum Tagesstand – sonst steht dort „1 Lauf“ ohne Hinweis, warum keiner mehr kommt.
+          const day = this.day();
+          if (this.store.today(founder, day)) this.store.setStopReason(founder, day, AUTO_SEARCH_STOP.failed(AUTO_SEARCH_MESSAGES.restarted));
           this.deps.log.warn({ founder, runId: last.runId }, 'Automatische Lead-Suche: Lauf durch Neustart abgebrochen');
         }
+        this.resumeFollowUp(founder);
         const pending = this.store.pending(founder);
         if (pending) {
           this.store.setPending(founder, null);
@@ -198,6 +226,44 @@ export class AutoSearchPlanner {
     }
   }
 
+  /**
+   * Eingereihten Folgelauf nach einem Neustart wieder aufnehmen (10.11.): nur am Tag des Termins, frühestens zur
+   * geplanten Zeit und nie in der ersten Minute nach dem Start. Alle Prüfungen (Plan an, Budget, Unipile, belegte
+   * Suche) macht `step()` wie bei jedem Folgelauf; Tagesziel und Höchstzahl der Läufe zählen aus der Datenbank weiter.
+   */
+  private resumeFollowUp(founder: AuthFounderId): void {
+    const stored = this.store.followUp(founder);
+    if (!stored) return;
+    if (stored.day !== this.day()) {
+      this.store.setFollowUp(founder, null);
+      return;
+    }
+    const notBefore = Math.max(stored.notBefore, this.now() + RESUME_PAUSE_MS);
+    if (stored.manual && stored.chain) this.manualChains.set(founder, { day: stored.day, created: stored.chain.created, rounds: stored.chain.rounds });
+    this.queue.push({ founder, startedAt: notBefore, waitingSince: null, followUp: true, day: stored.day, notBefore, manual: stored.manual });
+    this.deps.log.info({ founder, day: stored.day, notBefore }, 'Automatische Lead-Suche: Folgelauf nach Neustart wieder eingereiht');
+  }
+
+  /** Folgelauf einreihen und in der Datenbank merken (übersteht einen Neustart). */
+  private queueFollowUp(founder: AuthFounderId, day: string, notBefore: number, manual: boolean): void {
+    this.queue.push({ founder, startedAt: notBefore, waitingSince: null, followUp: true, day, notBefore, manual });
+    this.persistFollowUp(founder);
+  }
+
+  /** Gemerkter Folgelauf = der nächste in der Warteschlange dieses Gründers (oder keiner). */
+  private persistFollowUp(founder: AuthFounderId): void {
+    const job = this.queue.find((entry) => entry.founder === founder && entry.followUp);
+    const chain = job?.manual ? this.manualChains.get(founder) : undefined;
+    this.safe(
+      () =>
+        this.store.setFollowUp(
+          founder,
+          job ? { day: job.day, notBefore: job.notBefore ?? job.startedAt, manual: job.manual === true, chain: chain ? { created: chain.created, rounds: chain.rounds } : null } : null,
+        ),
+      founder,
+    );
+  }
+
   /** Zurücksetzen der Simulation: Pläne, Zustand und geprüfte Profile löschen, Warteschlange leeren. */
   reset(): void {
     this.queue.length = 0;
@@ -212,7 +278,7 @@ export class AutoSearchPlanner {
     const now = this.now();
     this.store.saveSchedule(founder, update, now, by);
     const saved = this.store.schedule(founder);
-    const key = saved?.enabled ? dueSlotAny(now, saved.days, timesOf(saved), AUTO_SEARCH_TIME_ZONE) : null;
+    const key = saved?.enabled ? dueSlotRandom(now, saved.days, timesOf(saved), AUTO_SEARCH_TIME_ZONE, founder, saved.randomMinutes) : null;
     if (key) this.store.claimSlot(founder, key);
     return this.schedule(founder);
   }
@@ -228,6 +294,7 @@ export class AutoSearchPlanner {
       secondTime: null,
       dailyBudgetEur: null,
       kapitalanlagePercent: AUTO_SEARCH_KAPITALANLAGE_PERCENT_DEFAULT,
+      randomMinutes: 0,
       updatedAt: null,
       updatedBy: null,
     };
@@ -238,7 +305,8 @@ export class AutoSearchPlanner {
       time: plan.time,
       secondTime: plan.secondTime,
       profile: plan.profile,
-      nextRunAt: plan.enabled ? nextRunAtAny(this.now(), plan.days, timesOf(plan), AUTO_SEARCH_TIME_ZONE) : null,
+      randomMinutes: plan.randomMinutes,
+      nextRunAt: plan.enabled ? nextRunAtRandom(this.now(), plan.days, timesOf(plan), AUTO_SEARCH_TIME_ZONE, founder, plan.randomMinutes) : null,
       ...this.followUpOf(founder),
       lastRun: this.store.lastRun(founder),
       nextFocus: nextAutoSearchFocus(this.store.focusCounts(founder), plan.kapitalanlagePercent),
@@ -300,7 +368,7 @@ export class AutoSearchPlanner {
       try {
         const plan = this.store.schedule(founder);
         if (!plan?.enabled) continue;
-        const key = dueSlotAny(now, plan.days, timesOf(plan), AUTO_SEARCH_TIME_ZONE);
+        const key = dueSlotRandom(now, plan.days, timesOf(plan), AUTO_SEARCH_TIME_ZONE, founder, plan.randomMinutes);
         if (!key || !this.store.claimSlot(founder, key)) continue;
         this.deps.log.info({ founder, slot: key }, 'Automatische Lead-Suche fällig');
         const job: Job = { founder, startedAt: Math.floor(now / MINUTE_MS) * MINUTE_MS, waitingSince: null, day: localClock(now, AUTO_SEARCH_TIME_ZONE).day };
@@ -406,6 +474,7 @@ export class AutoSearchPlanner {
     const index = this.queue.indexOf(job);
     if (index >= 0) this.queue.splice(index, 1);
     if (!job.followUp) this.safe(() => this.store.setPending(job.founder, null), job.founder);
+    else this.persistFollowUp(job.founder);
   }
 
   /** Ein Schritt für einen Termin: verwerfen/abschließen ('next'), warten ('wait') oder Lauf starten. */
@@ -490,7 +559,7 @@ export class AutoSearchPlanner {
         pendingInvitations: [],
         checked,
       },
-      Number.isFinite(remaining) ? { maxCostEur: Math.max(0, remaining) } : {},
+      Number.isFinite(remaining) ? { maxCostEur: Math.max(0, remaining), auto: true, founder } : { auto: true, founder },
     );
     this.safe(() => this.store.countFocus(founder, focus), founder);
     this.safe(() => void this.store.addToday(founder, day, { rounds: 1 }), founder);
@@ -524,6 +593,7 @@ export class AutoSearchPlanner {
     if (this.closed) return;
     const record = this.deps.runs.get(runId);
     let result: AutoSearchLastRun;
+    let runErrorCode: string | null = null;
     // Profile, die dieser Lauf neu geprüft hat (nicht schon bekannt) – 0 = Suche ausgeschöpft.
     let fresh = 0;
     try {
@@ -543,6 +613,7 @@ export class AutoSearchPlanner {
       } catch (error) {
         this.deps.log.warn({ founder, runId, err: errorText(error) }, 'Automatische Lead-Suche: Firmendaten nicht geholt');
       }
+      runErrorCode = run.error?.code ?? null;
       let status: AutoSearchLastRun['status'] = run.status === 'done' ? 'done' : run.status === 'cancelled' ? 'cancelled' : 'failed';
       let message =
         status === 'done'
@@ -567,7 +638,9 @@ export class AutoSearchPlanner {
     this.safe(() => this.store.setLastRun(founder, result), founder);
     this.deps.log.info({ founder, runId, status: result.status, created: result.created }, 'Automatische Lead-Suche beendet');
     this.safe(() => this.deps.onFinished?.(founder, result, false), founder);
-    this.safe(() => this.continueForTarget(founder, result, day, fresh), founder);
+    // Ausfall einzelner Accounts bzw. von Unipile (nicht: Limit) → später am Tag noch einmal versuchen (05.11.).
+    const retryable = result.status === 'failed' && !!runErrorCode && ['auth', 'provider', 'network'].includes(runErrorCode);
+    this.safe(() => this.continueForTarget(founder, result, day, fresh, retryable), founder);
   }
 
   /**
@@ -579,12 +652,12 @@ export class AutoSearchPlanner {
    * gehen vor. Sind alle LinkedIn-Accounts an ihrer Grenze, endet der Lauf mit Fehler → Stopp mit dem Satz des Adapters. Nach „Jetzt einmal ausführen“ genauso, auch bei
    * ausgeschaltetem Zeitplan; Leads und Läufe zählen dann ab dem Klick (`manualChains`).
    */
-  private continueForTarget(founder: AuthFounderId, result: AutoSearchLastRun, day: string, fresh: number): void {
+  private continueForTarget(founder: AuthFounderId, result: AutoSearchLastRun, day: string, fresh: number, retryable = false): void {
     const today = this.store.addToday(founder, day, { created: result.created, costEur: result.costEur ?? 0 });
     const chain = result.manual ? this.manualChains.get(founder) : undefined;
     if (result.manual && chain?.day !== day) return;
     const plan = this.store.schedule(founder);
-    if (!plan || (!plan.enabled && !chain) || plan.dailyTarget === null) return this.endChain(founder, chain);
+    if (!plan || (!plan.enabled && !chain)) return this.endChain(founder, chain);
     const created = today.created - (chain?.created ?? 0);
     const rounds = today.rounds - (chain?.rounds ?? 0);
     const info = { founder, day, created, rounds, manual: Boolean(chain) };
@@ -593,6 +666,8 @@ export class AutoSearchPlanner {
       this.endChain(founder, chain);
       this.safe(() => void this.store.setStopReason(founder, day, reason), founder);
     };
+    if (result.status === 'failed' && this.retryFailed(founder, day, rounds, retryable, chain, info, result.message)) return;
+    if (plan.dailyTarget === null) return this.endChain(founder, chain);
     if (created >= plan.dailyTarget) {
       this.endChain(founder, chain);
       this.deps.log.info(info, 'Automatische Lead-Suche: Tagesziel erreicht');
@@ -625,10 +700,39 @@ export class AutoSearchPlanner {
       this.deps.log.info(info, 'Automatische Lead-Suche: Tag des Termins vorbei – kein weiterer Lauf');
       return stop(AUTO_SEARCH_STOP.dayOver);
     }
-    const notBefore = this.now() + AUTO_SEARCH_FOLLOW_UP_PAUSE_MINUTES * MINUTE_MS;
-    this.queue.push({ founder, startedAt: notBefore, waitingSince: null, followUp: true, day, notBefore, manual: Boolean(chain) });
-    this.deps.log.info({ ...info, target: plan.dailyTarget, round: rounds + 1 }, 'Automatische Lead-Suche: weiterer Lauf für das Tagesziel');
+    // Zufällige Pausen (Nutzer 06.11.: „die einzelnen Läufe verteilen, hier mal eine Suche, da mal eine“): Mit
+    // `randomMinutes` wartet jeder weitere Lauf zufällig zwischen der festen Pause und `randomMinutes` Minuten – nicht
+    // mehr alle am Stück. Ohne Zufall wie bisher die feste Pause.
+    const pauseMinutes = followUpPauseMinutes(plan.randomMinutes, this.deps.random ?? Math.random);
+    const notBefore = this.now() + pauseMinutes * MINUTE_MS;
+    this.queueFollowUp(founder, day, notBefore, Boolean(chain));
+    this.deps.log.info({ ...info, target: plan.dailyTarget, round: rounds + 1, pauseMinutes }, 'Automatische Lead-Suche: weiterer Lauf für das Tagesziel');
     void this.pump();
+  }
+
+  /**
+   * Teammeeting 05.11. („Nicks Account gesperrt → ganzer Lauf weg“): Fiel nur ein Account bzw. Unipile kurz aus
+   * (`auth`/`provider`/`network`, nicht Limits), höchstens `AUTO_SEARCH_FAILED_RETRIES`-mal am Tag nach
+   * `AUTO_SEARCH_FAILED_RETRY_MINUTES` Minuten neu versuchen – die Suche nimmt dann die übrigen Accounts. true = eingereiht.
+   */
+  private retryFailed(
+    founder: AuthFounderId,
+    day: string,
+    rounds: number,
+    retryable: boolean,
+    chain: { day: string } | undefined,
+    info: object,
+    message: string | null,
+  ): boolean {
+    const key = `${founder}|${day}`;
+    const tries = this.failedRetries.get(key) ?? 0;
+    if (!retryable || tries >= AUTO_SEARCH_FAILED_RETRIES || day !== this.day() || rounds >= AUTO_SEARCH_MAX_ROUNDS_LIMIT) return false;
+    this.failedRetries.set(key, tries + 1);
+    const notBefore = this.now() + AUTO_SEARCH_FAILED_RETRY_MINUTES * MINUTE_MS;
+    this.queueFollowUp(founder, day, notBefore, Boolean(chain));
+    this.deps.log.warn({ ...info, retry: tries + 1, message }, 'Automatische Lead-Suche: Lauf fehlgeschlagen – neuer Versuch später');
+    void this.pump();
+    return true;
   }
 
   /** Kette nach „Jetzt einmal ausführen“ beenden – nur die eigene (ein neuer Klick hat schon eine neue angelegt). */

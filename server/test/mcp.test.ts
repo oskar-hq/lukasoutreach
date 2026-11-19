@@ -1,3 +1,4 @@
+import type { TasksResponse } from '../../shared/tasks.js';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
@@ -12,6 +13,7 @@ import { MockAdapter } from '../src/adapters/mock/mockAdapter.js';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { berlinMorning } from '../src/mcp/tools.js';
+import { captureLog } from '../src/telemetry/logs.js';
 import { MCP_CHANGEABLE_SETTING_KEYS } from '../src/mcp/settingsTools.js';
 import type { SettingsResponse } from '../../shared/settings.js';
 import { pkceMatches } from '../src/mcp/oauth.js';
@@ -24,8 +26,8 @@ after(async () => {
   for (const app of apps) await app.close();
 });
 
-function mcpApp() {
-  const config = loadConfig({ LEAD_SEARCH_MODE: 'mock', DATA_DIR: tempDataDir(), AUTH_DEMO_ACCOUNTS: 'true', AUTH_COOKIE_SECURE: 'false', MOCK_SPEED: '0' });
+function mcpApp(env: NodeJS.ProcessEnv = {}) {
+  const config = loadConfig({ LEAD_SEARCH_MODE: 'mock', DATA_DIR: tempDataDir(), AUTH_DEMO_ACCOUNTS: 'true', AUTH_COOKIE_SECURE: 'false', MOCK_SPEED: '0', ...env });
   const app = buildApp({ config, adapter: new MockAdapter(0), logger: false, requireSession: true });
   apps.push(app);
   return app;
@@ -152,6 +154,29 @@ test('Ablehnen: zurück zu Claude mit access_denied', async () => {
   assert.equal((await app.inject({ method: 'GET', url: `/api/oauth/consent/${id}`, headers: { cookie } })).statusCode, 404, 'Anfrage verbraucht');
 });
 
+test('todays_tasks: „Braucht Aufmerksamkeit“ gekürzt – Anzahl je Grund, älteste zuerst, weiterblättern', async () => {
+  // 10.11.: 433 Einträge = 74.712 Zeichen – zu groß für die Claude-App. Hier zählt jede offene Anfrage schon nach
+  // einem Tag, damit die Demo-Daten sicher mehrere Einträge liefern.
+  const app = mcpApp({ INVITE_STALE_DAYS: '1', FOLLOWUP_AFTER_DAYS: '1', MAX_FOLLOW_UPS: '0' });
+  const { cookie, tokens } = await connect(app);
+  const client = await mcpClient(app, tokens.access_token);
+  try {
+    const all = (await app.inject({ method: 'GET', url: '/api/tasks?owner=all', headers: { cookie } })).json() as TasksResponse;
+    assert.ok(all.attention.length >= 2, 'Demo-Daten mit „Braucht Aufmerksamkeit“');
+    const short = textOf(await client.callTool({ name: 'todays_tasks', arguments: { scope: 'all', attention_limit: 1 } }));
+    const attentionLines = (text: string) => text.slice(text.indexOf('## Braucht Aufmerksamkeit')).split('\n').filter((line) => line.startsWith('- '));
+    assert.match(short, new RegExp(`## Braucht Aufmerksamkeit \\(${all.attention.length}\\)`));
+    assert.match(short, /\d+ × /, 'Anzahl je Grund');
+    assert.equal(attentionLines(short).length, 1);
+    assert.match(short, new RegExp(`… und ${all.attention.length - 1} weitere – mit attention_offset: 1 weiterblättern`));
+    const paged = textOf(await client.callTool({ name: 'todays_tasks', arguments: { scope: 'all', attention_limit: 100, attention_offset: 1 } }));
+    assert.equal(attentionLines(paged).length, all.attention.length - 1);
+    assert.doesNotMatch(paged, /weiterblättern/);
+  } finally {
+    await client.close();
+  }
+});
+
 test('Claude-App: Aufgaben lesen, Notiz schreiben, Nachricht eintragen, Wiedervorlage – dann Token erneuern und trennen', async () => {
   const app = mcpApp();
   const { clientId, cookie, tokens } = await connect(app);
@@ -245,6 +270,75 @@ test('Einstellungen per Claude-App (31.10.): nachsehen, ändern, Grenzen prüfen
   assert.match(textOf(backup), /Passwort – nur in der Oberfläche/);
   const unchanged = (await app.inject({ method: 'GET', url: '/api/settings', headers: { cookie } })).json() as SettingsResponse;
   assert.notEqual(unchanged.settings.find((state) => state.key === 'BACKUP_HOUR_UTC')?.value, 'off');
+
+  // Optimierungs-Bericht per Claude-App (09.11.): ganz und nur einzelne Abschnitte.
+  assert.ok(tools.includes('optimization_report'));
+  const report = textOf(await client.callTool({ name: 'optimization_report', arguments: { days: 7 } }));
+  assert.match(report, /^# Optimierungs-Bericht/);
+  assert.match(report, /## Läufe der Lead-Suche/);
+  const part = textOf(await client.callTool({ name: 'optimization_report', arguments: { sections: ['linkedin'] } }));
+  assert.match(part, /## Wohin die LinkedIn-Abrufe gingen/);
+  assert.ok(!part.includes('## Läufe der Lead-Suche'), 'nur gewünschte Abschnitte');
+  assert.match(textOf(await client.callTool({ name: 'optimization_report', arguments: { sections: ['gibtsnicht'] } })), /Kein Abschnitt passt.*Vorhanden: /);
+
+  // Nutzungs-Bericht per Claude-App (09.11.).
+  assert.ok(tools.includes('usage_report'));
+  const usage = textOf(await client.callTool({ name: 'usage_report', arguments: { sections: ['API'] } }));
+  assert.match(usage, /^# Nutzungs-Bericht/);
+  assert.match(usage, /## API \(Server\)/);
+  assert.ok(!usage.includes('## Ansichten'));
+
+  // Systemzustand, Neuigkeiten, Server-Logs per Claude-App (09.11.).
+  for (const name of ['system_status', 'notifications', 'server_logs']) assert.ok(tools.includes(name), name);
+  const status = textOf(await client.callTool({ name: 'system_status', arguments: {} }));
+  assert.match(status, /^# Systemzustand/);
+  assert.match(status, /## Lead-Suche/);
+  assert.match(status, /## Update und Speicher/);
+  assert.ok(!(await client.callTool({ name: 'notifications', arguments: {} })).isError);
+  captureLog([{ err: new Error('Anthropic-Guthaben aufgebraucht') }, 'Neuer LinkedIn-Kontakt nicht übernommen'], 40);
+  captureLog(['Schlüssel sk-ant-abcdefghijklmnop123 gesehen'], 50);
+  const logs = textOf(await client.callTool({ name: 'server_logs', arguments: { contains: 'Kontakt' } }));
+  assert.match(logs, /\[warn\] Neuer LinkedIn-Kontakt nicht übernommen/);
+  assert.match(logs, /Anthropic-Guthaben aufgebraucht/);
+  const errors = textOf(await client.callTool({ name: 'server_logs', arguments: { level: 'error' } }));
+  assert.match(errors, /\[geschwärzt\]/);
+  assert.ok(!errors.includes('sk-ant-abcdefghijklmnop123'), 'Schlüssel geschwärzt');
+
+  // Feedback (09.11.): aus der Oberfläche mit Bild und Zusammenhang, aus der Claude-App, lesen, Stand setzen → Glocke.
+  for (const name of ['submit_feedback', 'list_feedback', 'feedback_detail', 'update_feedback']) assert.ok(tools.includes(name), name);
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const posted = await app.inject({
+    method: 'POST',
+    url: '/api/feedback',
+    headers: { cookie },
+    payload: { text: 'Beim Klick auf Senden passiert nichts', context: { view: 'focus', leadId: 'lead-1', trail: ['12:00:01 click followup-send (focus)'], errors: ['POST /api/leads/:id/events → 500'] }, images: [png, 'kaputt'] },
+  });
+  assert.equal(posted.statusCode, 201, posted.body);
+  const created = posted.json() as { number: number; kind: string; imageCount: number };
+  assert.equal(created.kind, 'bug', 'mit Fehlern im Zusammenhang → Fehler');
+  assert.equal(created.imageCount, 1, 'kaputtes Bild verworfen');
+  const viaChat = textOf(await client.callTool({ name: 'submit_feedback', arguments: { text: 'Bitte Follow-ups auch am Wochenende', kind: 'wish' } }));
+  assert.match(viaChat, /Gemeldet als #2/);
+  const open = textOf(await client.callTool({ name: 'list_feedback', arguments: {} }));
+  assert.match(open, /#1.*Etwas geht nicht · Eingegangen/);
+  assert.match(open, /#2.*Idee \/ Wunsch/);
+  const detail = await client.callTool({ name: 'feedback_detail', arguments: { id: '1' } });
+  const parts = detail.content as Array<{ type: string; text?: string; mimeType?: string }>;
+  assert.match(parts[0].text!, /click followup-send \(focus\)/);
+  assert.match(parts[0].text!, /POST \/api\/leads\/:id\/events → 500/);
+  assert.match(parts[0].text!, /offener Lead: lead-1/);
+  assert.equal(parts.filter((part) => part.type === 'image' && part.mimeType === 'image/png').length, 1, 'Bild kommt mit');
+  const done = textOf(await client.callTool({ name: 'update_feedback', arguments: { id: '#1', status: 'done', answer: 'Ist behoben, ab dem nächsten Update da.' } }));
+  assert.match(done, /#1: Erledigt/);
+  const bell = (await app.inject({ method: 'GET', url: '/api/notifications', headers: { cookie } })).json() as { notifications: Array<{ title: string; text: string }> };
+  assert.ok(bell.notifications.some((item) => item.title === 'Deine Meldung #1: Erledigt' && item.text === 'Ist behoben, ab dem nächsten Update da.'), 'Melder sieht es in der Glocke');
+  assert.ok(!bell.notifications.some((item) => item.title.startsWith('Feedback #1 von')), 'neues Feedback #1 ist erledigt');
+  assert.equal((await app.inject({ method: 'GET', url: '/api/feedback/1/images/1', headers: { cookie } })).headers['content-type'], 'image/png');
+
+  // Update per Claude-App (09.11.): dieselbe Route wie der Knopf – ohne Update-Dienst ein klarer Satz.
+  assert.ok(tools.includes('start_update'));
+  const update = await client.callTool({ name: 'start_update', arguments: {} });
+  assert.match(textOf(update), /Update gestartet|Schon aktuell|läuft schon|Update-Dienst/);
 
   const auto = await client.callTool({ name: 'change_auto_search', arguments: { founder: 'nick', time: '09:30', kapitalanlage_percent: 70 } });
   assert.ok(!auto.isError, textOf(auto));

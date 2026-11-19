@@ -28,7 +28,8 @@ jobs:
 
   frontend:
     name: Frontend · Typprüfung, Build, E2E (gegen Mock-Backend)
-    runs-on: ubuntu-latest
+    # Fest auf 24.04 (09.11.): ubuntu-latest ist jetzt 26.04, dafür installiert Playwright 1.56 keinen Chromium.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4

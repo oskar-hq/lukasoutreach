@@ -327,6 +327,9 @@ test('Mitarbeiter: Einstellungen 403, Vorlagen nur lesen', async () => {
     ['POST', '/api/settings/trial/confirm'],
     ['PUT', '/api/templates/G1'],
     ['POST', '/api/templates/G1/reset'],
+    // Account deaktivieren (03.11.) wie Grenzen: nur Admin und Gründer.
+    ['PUT', '/api/linkedin/accounts/mock-scraper/disabled'],
+    ['PUT', '/api/linkedin/accounts/mock-scraper/limits'],
     // Kodierte Adresse trifft dieselbe Route – darf die Prüfung nicht umgehen.
     ['GET', '/%61pi/settings'],
     ['GET', '/api/%73ettings'],

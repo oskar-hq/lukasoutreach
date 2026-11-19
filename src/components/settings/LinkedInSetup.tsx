@@ -1,9 +1,13 @@
-import { ArrowDown, ArrowUp, Ban, Check, Flame, Send, UserCheck, UserPlus } from 'lucide-react';
+import { ArrowDown, ArrowUp, Ban, Check, Flame, Power, Send, UserCheck, UserPlus } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { FOUNDER_IDS, FOUNDERS } from '../../data/founders';
 import type { AuthFounderId } from '../../../shared/auth';
 import {
+  LINKEDIN_INVITE_MODES,
+  LINKEDIN_INVITE_MODE_LABELS,
+  MANUAL_INVITES_DEFAULT_DAYS,
   MESSAGE_MAX_LENGTH,
+  type LinkedInInviteMode,
   type LinkedInAccountLimits,
   type LinkedInTestProfile,
   type LinkedInUnipileAccount,
@@ -105,6 +109,30 @@ function AccountPicker({
   const savedLimits = (accountId: string, limits: LinkedInAccountLimits) => {
     if (state.status !== 'ready') return;
     setState({ status: 'ready', accounts: state.accounts.map((account) => (account.id === accountId ? { ...account, limits } : account)) });
+  };
+
+  /**
+   * Account deaktivieren (Wunsch des Nutzers 03.11.): ein Klick statt alle Grenzen auf 0 – danach geht kein Traffic mehr
+   * darüber (Suche, Profile, Firmenseiten, Aufwärmen, Senden). Wirkt sofort (eigener Speicher, kein Entwurf).
+   */
+  const [disabledError, setDisabledError] = useState<string | null>(null);
+  const [switching, setSwitching] = useState<string | null>(null);
+  const toggleDisabled = async (accountId: string, disabled: boolean) => {
+    if (state.status !== 'ready') return;
+    setDisabledError(null);
+    setSwitching(accountId);
+    try {
+      const result = await linkedinApi.accountDisabled(accountId, disabled);
+      setState((current) =>
+        current.status === 'ready'
+          ? { status: 'ready', accounts: current.accounts.map((account) => (account.id === accountId ? { ...account, disabled: result.disabled } : account)) }
+          : current,
+      );
+    } catch (error) {
+      setDisabledError(error instanceof ApiError ? error.message : 'Account ließ sich nicht umschalten.');
+    } finally {
+      setSwitching(null);
+    }
   };
 
   /** Aufwärmen an/aus – ein Gründer-Account wird nie aufgewärmt (das Backend lehnt es ab). */
@@ -221,16 +249,42 @@ function AccountPicker({
                 );
               }
               return (
-              <li key={account.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-2" data-testid="linkedin-account">
-                <div className="min-w-0">
+              <li
+                key={account.id}
+                className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-2"
+                data-testid="linkedin-account"
+                data-disabled={account.disabled ? 'true' : undefined}
+              >
+                <div className={cn('min-w-0', account.disabled && 'opacity-50')}>
                   <p className="text-[13px] font-semibold text-ink">
                     {!founderLast && <span className="mr-1.5 tabular-nums text-ink-3">{place + 1}.</span>}
                     {account.name}
                   </p>
                   <p className="truncate text-[11px] text-ink-3">ID {account.id}</p>
-                  {warmup.includes(account.id) && <WarmupLine status={warmupStatus} accountId={account.id} />}
+                  {warmup.includes(account.id) && !account.disabled && <WarmupLine status={warmupStatus} accountId={account.id} />}
                 </div>
                 <div className="flex flex-wrap gap-1.5">
+                  {account.disabled !== undefined && (
+                    <button
+                      type="button"
+                      aria-pressed={account.disabled}
+                      disabled={switching === account.id}
+                      title={
+                        account.disabled
+                          ? 'Wieder einschalten – Grenzen und Platz in der Reihenfolge sind noch da.'
+                          : 'Mit einem Klick abschalten: keine Suche, keine Profile, keine Firmenseiten, kein Aufwärmen und kein Senden mehr über diesen Account.'
+                      }
+                      onClick={() => void toggleDisabled(account.id, !account.disabled)}
+                      className={cn(
+                        'inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-colors disabled:opacity-50',
+                        account.disabled ? 'border-ink/60 bg-surface-3 text-ink' : 'border-line-strong text-ink-2 hover:border-white/25 hover:text-ink',
+                      )}
+                      data-testid="linkedin-disable"
+                    >
+                      {account.disabled ? <Power className="h-3.5 w-3.5" aria-hidden /> : <Ban className="h-3.5 w-3.5" aria-hidden />}
+                      {account.disabled ? 'Einschalten' : 'Deaktivieren'}
+                    </button>
+                  )}
                   {founders.map((founder) => {
                     const active = assignment(founder) === account.id;
                     // Ein Account gehört nur einem Gründer – sonst gälten seine LinkedIn-Grenzen doppelt.
@@ -288,7 +342,25 @@ function AccountPicker({
                     </button>
                   )}
                 </div>
-                <div className="flex w-full flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px] text-ink-3">
+                {account.inviteMode && account.assignedTo && !account.disabled && (
+                  <InviteModePicker
+                    account={account}
+                    onSaved={(mode, until) =>
+                      setState((current) =>
+                        current.status === 'ready'
+                          ? { status: 'ready', accounts: current.accounts.map((entry) => (entry.id === account.id ? { ...entry, inviteMode: mode, manualUntil: until } : entry)) }
+                          : current,
+                      )
+                    }
+                  />
+                )}
+                {account.disabled && (
+                  <p className="w-full text-[12.5px] text-ink-2" data-testid="linkedin-disabled-note">
+                    Deaktiviert – über diesen Account läuft nichts mehr: keine Suche, keine Profile, keine Firmenseiten
+                    {account.assignedTo ? ', kein Senden und kein Abgleich' : ', kein Aufwärmen'}.
+                  </p>
+                )}
+                <div className={cn('flex w-full flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px] text-ink-3', account.disabled && 'opacity-50')}>
                   <span className="inline-flex items-center gap-1">
                     Suche: {founderLast ? 'zuletzt (Gründer)' : place === 0 ? 'zuerst' : `an ${place + 1}. Stelle`}
                     <button
@@ -335,6 +407,11 @@ function AccountPicker({
       {orderError && (
         <StatusLine tone="bad" role="alert" className="mt-3 text-[13.5px]">
           {orderError}
+        </StatusLine>
+      )}
+      {disabledError && (
+        <StatusLine tone="bad" role="alert" className="mt-3 text-[13.5px]">
+          {disabledError}
         </StatusLine>
       )}
       {/* Fallback ohne Liste: die IDs selbst eintragen (auch, wenn das Laden scheitert oder keiner verbunden ist). */}
@@ -747,5 +824,90 @@ export function SearchAccountPicker({
           </ul>
         ))}
     </section>
+  );
+}
+
+const INVITE_MODE_HELP: Record<LinkedInInviteMode, string> = {
+  spread: 'Ein Klick auf „Vernetzen“ plant die Anfrage ein – das Cockpit schickt sie zu zufälligen Zeiten über den Arbeitstag verteilt.',
+  instant: 'Anfragen gehen sofort beim Klick raus.',
+  manual: 'Das Cockpit schickt über diesen Account keine Anfragen – ihr vernetzt euch im Sales Navigator. Angenommene Kontakte übernimmt es von allein.',
+};
+
+/**
+ * Wie Anfragen über einen Gründer-Account rausgehen (Teammeeting 05.11.): über den Tag verteilt (Standard), sofort
+ * oder nur von Hand – mit Enddatum (Testwoche, Vorschlag 7 Tage). Wirkt sofort (eigener Speicher, kein Entwurf).
+ */
+function InviteModePicker({ account, onSaved }: { account: LinkedInUnipileAccount; onSaved: (mode: LinkedInInviteMode, until: number | null) => void }) {
+  const mode = account.inviteMode ?? 'spread';
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [days, setDays] = useState(MANUAL_INVITES_DEFAULT_DAYS);
+  const save = async (next: LinkedInInviteMode, until: number | null) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await linkedinApi.inviteMode(account.id, { mode: next, until });
+      onSaved(result.mode, result.until ?? null);
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Ließ sich nicht speichern.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const endOf = (count: number) => {
+    const end = new Date();
+    end.setHours(23, 59, 0, 0);
+    end.setDate(end.getDate() + count - 1);
+    return end.getTime();
+  };
+  return (
+    <div className="w-full space-y-1.5" data-testid="linkedin-invite-mode">
+      <div className="flex flex-wrap items-center gap-1.5 text-[12.5px]">
+        <span className="mr-1 text-ink-3">Anfragen:</span>
+        {LINKEDIN_INVITE_MODES.map((option) => (
+          <button
+            key={option}
+            type="button"
+            aria-pressed={mode === option}
+            disabled={busy}
+            onClick={() => void save(option, option === 'manual' ? endOf(days) : null)}
+            className={cn(
+              'inline-flex h-7 items-center rounded-full border px-2.5 transition-colors disabled:opacity-50',
+              mode === option ? 'border-ink/60 bg-surface-3 text-ink' : 'border-line-strong text-ink-2 hover:border-white/25 hover:text-ink',
+            )}
+            data-testid={`linkedin-invite-mode-${option}`}
+          >
+            {LINKEDIN_INVITE_MODE_LABELS[option]}
+          </button>
+        ))}
+      </div>
+      <p className="text-[12px] leading-[1.5] text-ink-3">
+        {INVITE_MODE_HELP[mode]}
+        {mode === 'manual' &&
+          (account.manualUntil
+            ? ` Bis ${new Date(account.manualUntil).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}, danach wieder über den Tag verteilt.`
+            : ' Bis auf Widerruf.')}
+      </p>
+      {mode !== 'manual' && (
+        <label className="flex items-center gap-1.5 text-[12px] text-ink-3">
+          „Nur von Hand“ für
+          <input
+            type="number"
+            min={1}
+            max={60}
+            value={days}
+            onChange={(event) => setDays(Math.max(1, Math.min(60, Number(event.target.value) || 1)))}
+            className="h-7 w-14 rounded-[8px] border border-line-strong bg-transparent px-2 text-ink"
+            data-testid="linkedin-manual-days"
+          />
+          Tage
+        </label>
+      )}
+      {error && (
+        <p role="alert" className="text-[12.5px] text-ink">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }

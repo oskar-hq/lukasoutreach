@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { AUTH_FOUNDER_IDS, defaultFounderName } from '../../../shared/auth.js';
 import { AUTO_SEARCH_FOCUS_LABELS, type AutoSearchListResponse, type AutoSearchSchedule, type AutoSearchUpdate, type Weekday } from '../../../shared/autoSearch.js';
 import type { LinkedInAccountLimits, LinkedInAccountsResponse } from '../../../shared/linkedin.js';
+import type { UpdateStatusResponse } from '../../../shared/system.js';
 import {
   SETTINGS,
   SETTING_GROUP_LABELS,
@@ -31,7 +32,7 @@ export type CockpitCall = <T>(method: 'GET' | 'POST' | 'PATCH' | 'PUT', url: str
 /** Satz für Wünsche, die es (noch) nicht gibt – steht auch in den Server-Anweisungen. */
 export const NOT_BUILT_YET = 'Das ist leider noch nicht gebaut. Wende dich bitte an die Entwickler.';
 
-export const SETTINGS_INSTRUCTIONS = `Einstellungen: Möchte der Nutzer, dass etwas anders läuft (Grenzen, Zeiten, Suche, Follow-ups, KI, Accounts …), ruf zuerst find_settings auf und prüf, ob es dafür schon eine Einstellung gibt – meistens gibt es sie. Dann erklär kurz, welche es ist, und nenn alten und neuen Wert; ändere erst nach seinem Ja (außer er hat es schon klar so verlangt) mit change_setting, change_auto_search oder change_account_limits. Ist sie mit „nur in der Oberfläche“ markiert, sag ihm, wo er sie im Cockpit findet (Einstellungen → Bereich). Gibt es nichts Passendes, sag genau: „${NOT_BUILT_YET}“ – und fasse in einem Satz zusammen, was er sich wünscht, damit er es weitergeben kann. Erfinde keine Einstellungen.`;
+export const SETTINGS_INSTRUCTIONS = `Einstellungen: Möchte der Nutzer, dass etwas anders läuft (Grenzen, Zeiten, Suche, Follow-ups, KI, Accounts …), ruf zuerst find_settings auf und prüf, ob es dafür schon eine Einstellung gibt – meistens gibt es sie. Dann erklär kurz, welche es ist, und nenn alten und neuen Wert; ändere erst nach seinem Ja (außer er hat es schon klar so verlangt) mit change_setting, change_auto_search oder change_account_limits. Ist sie mit „nur in der Oberfläche“ markiert, sag ihm, wo er sie im Cockpit findet (Einstellungen → Bereich). Gibt es nichts Passendes, sag genau: „${NOT_BUILT_YET}“ – fasse in einem Satz zusammen, was er sich wünscht, und biete an, es mit submit_feedback direkt an die Entwickler zu melden. Erfinde keine Einstellungen.`;
 
 /** Im Chat änderbar: alles außer Geheimnissen, Passwort-Rückfrage, Probe-Änderungen und `.env`-Werten. */
 function chatBlock(definition: SettingDefinition): string | null {
@@ -150,7 +151,7 @@ export function registerSettingsTools(server: McpServer, call: CockpitCall): voi
       if (auto.ok) for (const schedule of auto.body.schedules) lines.push(...scheduleLines(schedule));
       else lines.push(`Nicht lesbar: ${auto.message}`);
 
-      lines.push('', '## Tagesgrenzen je LinkedIn-Account (Einstellungen → Senden über LinkedIn)', 'Ändern mit change_account_limits (account_id + Grenzen, null = Standard).');
+      lines.push('', '## Tagesgrenzen je LinkedIn-Account (Einstellungen → Senden über LinkedIn)', 'Ändern mit change_account_limits (account_id + Grenzen, null = Standard; disabled: true schaltet den Account ganz ab – kein Traffic mehr darüber).');
       const accounts = await call<LinkedInAccountsResponse>('GET', '/api/linkedin/accounts');
       if (!accounts.ok) lines.push(`Nicht lesbar: ${accounts.message}`);
       else if (!accounts.body.accounts.length) lines.push('Keine LinkedIn-Accounts verbunden.');
@@ -159,7 +160,7 @@ export function registerSettingsTools(server: McpServer, call: CockpitCall): voi
           const who = account.assignedTo ? `Gründer-Account ${defaultFounderName(account.assignedTo)}` : account.warmup ? 'wird aufgewärmt' : 'Such-Account';
           const defaults = account.limitDefaults;
           lines.push(
-            `- **${account.name}** (account_id ${account.id}) · ${who} · Profile/Tag (profiles_per_day): ${limitText(account.limits?.profilesPerDay, defaults?.profilesPerDay)} · Suchtreffer/Tag (search_results_per_day): ${limitText(account.limits?.searchResultsPerDay, defaults?.searchResultsPerDay)} · Anfragen/Tag (invites_per_day): ${limitText(account.limits?.invitesPerDay, defaults?.invitesPerDay)}`,
+            `- **${account.name}** (account_id ${account.id}) · ${who}${account.disabled ? ' · **deaktiviert** (kein Traffic)' : ''} · Profile/Tag (profiles_per_day): ${limitText(account.limits?.profilesPerDay, defaults?.profilesPerDay)} · Suchtreffer/Tag (search_results_per_day): ${limitText(account.limits?.searchResultsPerDay, defaults?.searchResultsPerDay)} · Anfragen/Tag (invites_per_day): ${limitText(account.limits?.invitesPerDay, defaults?.invitesPerDay)}`,
           );
         }
       }
@@ -170,7 +171,7 @@ export function registerSettingsTools(server: McpServer, call: CockpitCall): voi
         '- Vorlagen (Anfragen und Nachrichten): Einstellungen → Vorlagen (lesen mit list_templates)',
         '- Such-Reihenfolge der LinkedIn-Accounts, Accounts zuordnen: Einstellungen → Senden über LinkedIn',
         '- Konten und Mitarbeiter, Passwort: Konto-Menü oben rechts',
-        '- Sicherung jetzt erstellen, Software-Update starten: Einstellungen → Sicherungen bzw. Software-Update',
+        '- Sicherung jetzt erstellen: Einstellungen → Sicherungen (ein Software-Update startet start_update)',
         '- Wer hat was geändert: Einstellungen → Verlauf',
       );
       return ok(lines.join('\n'));
@@ -258,31 +259,66 @@ export function registerSettingsTools(server: McpServer, call: CockpitCall): voi
     },
   );
 
+  server.registerTool(
+    'start_update',
+    {
+      title: 'Software-Update einspielen',
+      description:
+        'Sieht bei GitHub nach, ob es eine neue Version im Integrations-Branch gibt, und spielt sie ein – wie der Knopf unter Einstellungen → Software-Update (vorher Sicherung der Datenbank, das Cockpit ist ein paar Minuten nicht erreichbar). Nur Gründer und Admins. Ist schon alles aktuell, passiert nichts.',
+      annotations: WRITE,
+    },
+    async () => {
+      const checked = await call<UpdateStatusResponse>('POST', '/api/system/update/check');
+      if (!checked.ok) return fail(checked.message);
+      const status = checked.body;
+      if (!status.available) return fail(status.reason ?? 'Der Update-Dienst ist nicht erreichbar.');
+      if (status.state === 'running') return ok('Es läuft schon ein Update.');
+      if (status.behind === 0 && !status.pendingBuild) return ok(`Schon aktuell${status.current ? ` (${status.current.commit} · ${status.current.title})` : ''}.`);
+      const started = await call<UpdateStatusResponse>('POST', '/api/system/update');
+      if (!started.ok) return fail(started.message);
+      const changes = status.changes.slice(0, 10).map((change) => `- ${change.title}`);
+      return ok(
+        [
+          `Update gestartet${started.body.simulated ? ' (Simulation)' : ''}: ${status.behind} neue Änderung${status.behind === 1 ? '' : 'en'}. Das Cockpit ist gleich ein paar Minuten nicht erreichbar.`,
+          ...changes,
+        ].join('\n'),
+      );
+    },
+  );
+
   const limit = z.number().int().min(0).nullable().optional();
   server.registerTool(
     'change_account_limits',
     {
       title: 'Grenzen eines LinkedIn-Accounts ändern',
-      description: 'Eigene Tagesgrenzen eines LinkedIn-Accounts (account_id aus find_settings). null = Standard. Nie höher als die festen Unipile-Grenzen.',
+      description: 'Eigene Tagesgrenzen eines LinkedIn-Accounts (account_id aus find_settings). null = Standard. Nie höher als die festen Unipile-Grenzen. disabled: true = Account ganz deaktivieren (keine Suche, Profile, Firmenseiten, Aufwärmen, Senden), false = wieder einschalten.',
       inputSchema: {
         account_id: z.string().trim().min(1).max(200),
         profiles_per_day: limit,
         search_results_per_day: limit,
         invites_per_day: limit,
+        disabled: z.boolean().optional(),
       },
       annotations: WRITE,
     },
-    async ({ account_id, profiles_per_day, search_results_per_day, invites_per_day }) => {
+    async ({ account_id, profiles_per_day, search_results_per_day, invites_per_day, disabled }) => {
       const patch: Partial<LinkedInAccountLimits> = {
         ...(profiles_per_day !== undefined ? { profilesPerDay: profiles_per_day } : {}),
         ...(search_results_per_day !== undefined ? { searchResultsPerDay: search_results_per_day } : {}),
         ...(invites_per_day !== undefined ? { invitesPerDay: invites_per_day } : {}),
       };
-      if (!Object.keys(patch).length) return fail('Nichts zu ändern angegeben.');
+      if (!Object.keys(patch).length && disabled === undefined) return fail('Nichts zu ändern angegeben.');
+      let switched = '';
+      if (disabled !== undefined) {
+        const result = await call<{ disabled: boolean }>('PUT', `/api/linkedin/accounts/${encodeURIComponent(account_id)}/disabled`, { disabled });
+        if (!result.ok) return fail(result.message);
+        switched = result.body.disabled ? 'Account deaktiviert – kein Traffic mehr darüber.' : 'Account wieder eingeschaltet.';
+        if (!Object.keys(patch).length) return ok(switched);
+      }
       const saved = await call<LinkedInAccountLimits>('PUT', `/api/linkedin/accounts/${encodeURIComponent(account_id)}/limits`, patch);
       if (!saved.ok) return fail(saved.message);
       const show = (value: number | null) => (value === null ? 'Standard' : String(value));
-      return ok(`Gespeichert: Profile/Tag ${show(saved.body.profilesPerDay)} · Suchtreffer/Tag ${show(saved.body.searchResultsPerDay)} · Anfragen/Tag ${show(saved.body.invitesPerDay)}.`);
+      return ok(`${switched ? `${switched} ` : ''}Gespeichert: Profile/Tag ${show(saved.body.profilesPerDay)} · Suchtreffer/Tag ${show(saved.body.searchResultsPerDay)} · Anfragen/Tag ${show(saved.body.invitesPerDay)}.`);
     },
   );
 }

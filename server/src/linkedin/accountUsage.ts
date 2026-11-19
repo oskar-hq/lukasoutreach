@@ -30,10 +30,27 @@ export const FOUNDER_SCRAPE_LIMITS = {
 /** `profile` = Profil- oder Firmenabruf, `search` = angefragte Suchtreffer (volle Seite, auch wenn weniger kommen). */
 export type UsageKind = 'profile' | 'search';
 
+/**
+ * Wofür ein Abruf war (09.11., nur für den Optimierungs-Bericht): Profil bzw. Firmenseite der Lead-Suche, dasselbe beim
+ * Übernehmen neuer Kontakte, Profil beim Aufwärmen, Suchtreffer.
+ */
+export type UsageSource = 'lead_profile' | 'lead_company' | 'contact_profile' | 'contact_company' | 'warmup' | 'search';
+export const USAGE_SOURCE_LABELS: Record<UsageSource, string> = {
+  lead_profile: 'Lead-Suche: Profil',
+  lead_company: 'Lead-Suche: Firmenseite',
+  contact_profile: 'Neue Kontakte: Profil',
+  contact_company: 'Neue Kontakte: Firmenseite',
+  warmup: 'Aufwärmen: Profil',
+  search: 'Suchtreffer',
+};
+/** So lange bleibt das Protokoll je Zweck (der Zähler fürs Limit nur 14 Tage). */
+export const USAGE_LOG_KEEP_DAYS = 120;
+
 /** Zähler je Unipile-Account und Kalendertag (deutsche Zeit) – für Suche und Profilabrufe aller Läufe zusammen. */
 export interface AccountUsage {
   used(accountId: string, kind: UsageKind, now: number): number;
-  add(accountId: string, kind: UsageKind, count: number, now: number): void;
+  /** `source`: wofür (nur Protokoll, ändert das Limit nicht). */
+  add(accountId: string, kind: UsageKind, count: number, now: number, source?: UsageSource): void;
 }
 
 /** Ohne Datenbank (Tests, Befehle): Zähler im Speicher. */
@@ -50,7 +67,7 @@ export class MemoryAccountUsage implements AccountUsage {
     return this.counts.get(this.key(accountId, kind, now)) ?? 0;
   }
 
-  add(accountId: string, kind: UsageKind, count: number, now: number): void {
+  add(accountId: string, kind: UsageKind, count: number, now: number, _source?: UsageSource): void {
     const key = this.key(accountId, kind, now);
     this.counts.set(key, (this.counts.get(key) ?? 0) + count);
   }
@@ -74,7 +91,7 @@ export class DbAccountUsage implements AccountUsage {
     return row?.count ?? 0;
   }
 
-  add(accountId: string, kind: UsageKind, count: number, now: number): void {
+  add(accountId: string, kind: UsageKind, count: number, now: number, source?: UsageSource): void {
     this.db
       .prepare(
         'INSERT INTO linkedin_account_usage (day, account_id, kind, count) VALUES (?, ?, ?, ?) ON CONFLICT(day, account_id, kind) DO UPDATE SET count = count + excluded.count',
@@ -82,5 +99,15 @@ export class DbAccountUsage implements AccountUsage {
       .run(this.day(now), accountId, kind, count);
     // Alte Tage braucht niemand mehr.
     this.db.prepare('DELETE FROM linkedin_account_usage WHERE day < ?').run(this.day(now - 14 * 24 * 60 * 60 * 1000));
+    try {
+      this.db
+        .prepare(
+          'INSERT INTO linkedin_usage_log (day, account_id, source, count) VALUES (?, ?, ?, ?) ON CONFLICT(day, account_id, source) DO UPDATE SET count = count + excluded.count',
+        )
+        .run(this.day(now), accountId, source ?? (kind === 'search' ? 'search' : 'lead_profile'), count);
+      this.db.prepare('DELETE FROM linkedin_usage_log WHERE day < ?').run(this.day(now - USAGE_LOG_KEEP_DAYS * 24 * 60 * 60 * 1000));
+    } catch {
+      // Protokoll ist Beiwerk – das Limit zählt oben.
+    }
   }
 }

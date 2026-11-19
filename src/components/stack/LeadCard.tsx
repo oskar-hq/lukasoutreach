@@ -93,6 +93,18 @@ export function LeadCard({ card, onDecide, onOpenLead, hotkeysEnabled }: CardPro
     });
   };
 
+  // „Manuell vernetzt“ (Wunsch des Nutzers 09.11.): auf LinkedIn selbst vernetzt (Profil öffnen, dort senden) – das
+  // Cockpit trägt es nur ein, in der Statistik zählt es als „von Hand“. Zum Vergleich, ob das besser angenommen wird.
+  const connectManually = () => {
+    if (limitReached) return;
+    onDecide({
+      decision: 'connect',
+      positive: true,
+      action: { action: 'invite_sent', manual: true },
+      toast: { pending: 'Wird als von Hand vernetzt eingetragen', done: 'Als von Hand vernetzt eingetragen', short: { pending: 'Wird eingetragen', done: 'Von Hand vernetzt' } },
+    });
+  };
+
   const openNote = () => {
     setNoteOpen(true);
     window.requestAnimationFrame(() => focusAtEnd(noteRef.current));
@@ -109,7 +121,7 @@ export function LeadCard({ card, onDecide, onOpenLead, hotkeysEnabled }: CardPro
       toast: { pending: 'Wird aussortiert', done: 'Aussortiert' },
     });
 
-  useHotkeys({ enter: connect, arrowright: connect, arrowleft: reject }, hotkeysEnabled && present);
+  useHotkeys({ enter: connect, arrowright: connect, arrowleft: reject, ...(mode === 'send' ? { m: connectManually } : {}) }, hotkeysEnabled && present);
   useSwipeActions({ right: { label: texts.swipe, run: connect }, left: { label: 'Nicht geeignet', run: reject } });
 
   // Ein Satz statt KI-Blöcken: Einschätzung (mit Sicherheit) und Signal.
@@ -126,6 +138,12 @@ export function LeadCard({ card, onDecide, onOpenLead, hotkeysEnabled }: CardPro
             <span className="sm:hidden">{texts.short}</span>
             <span className="hidden sm:inline">{texts.button}</span>
           </Button>
+          {mode === 'send' && (
+            // Nur wenn das Cockpit selbst sendet – sonst heißt „Vernetzen“ ohnehin „auf LinkedIn senden und eintragen“.
+            <Button variant="ghost" size="lg" shortcut="M" onClick={connectManually} disabled={limitReached} className="col-span-2 w-full" data-testid="connect-manual">
+              Manuell vernetzt
+            </Button>
+          )}
         </>
       }
     >

@@ -28,7 +28,7 @@ test('Dashboard: KI-Kosten (Simulation mit Beispielwerten), jeder Lauf zählt da
   assert.equal(before.usdToEur, 0.9);
   assert.ok(before.totalEur > 5 && before.totalEur < 20, String(before.totalEur));
   assert.ok(before.monthEur > 0 && before.periodEur > 0);
-  assert.deepEqual(Object.keys(before.byPurpose).sort(), ['assistant', 'conversation', 'prescreen', 'qualify', 'suggest']);
+  assert.deepEqual(Object.keys(before.byPurpose).sort(), ['assistant', 'conversation', 'prescreen', 'qualify', 'shadow', 'suggest']);
   const sum = Object.values(before.byPurpose).reduce((a, b) => a + b, 0);
   assert.ok(Math.abs(sum - before.totalEur) < 0.05);
 

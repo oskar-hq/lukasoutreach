@@ -68,7 +68,18 @@ Von Hand: `npm run agents:status`. Lies es, bevor du loslegst.
 - Klein und oft: ein PR pro abgeschlossener Sache gegen `main`. Titel beginnt mit
   `[frontend]`, `[backend]` oder `[contract]`.
 - PR erst, wenn `npm run verify:frontend` bzw. `npm run verify:backend` lokal grün ist. Die CI
-  (`.github/workflows/ci.yml`) prüft beide Seiten und muss grün sein. **Gemergt wird nur auf Ansage des Nutzers.**
+  (`.github/workflows/ci.yml`) prüft beide Seiten. **Seit 09.11. (Nutzer): eigenen PR direkt nach dem Öffnen selbst
+  mergen – nicht auf die CI warten.** Wird die CI danach rot, im nächsten PR beheben. **Danach sofort das Update auf dem
+  Server starten:** Tool `start_update` der Cockpit-Verbindung (MCP „Outreach Server“). Ohne diese Verbindung dem Nutzer
+  sagen: Einstellungen → System → Update.
+- **Live-Daten holst du dir selbst** über die Cockpit-Verbindung: `optimization_report` (Optimierungs-Bericht, mit
+  `sections` eingrenzen), `usage_report` (Nutzung, Fehler, API, Jobs), `system_status` (Zustand jetzt, `test: true` =
+  Anthropic/Unipile live), `notifications` (Glocke), `server_logs`, `find_settings`, `outreach_analysis`,
+  `read_conversations` … – nicht den Nutzer um Screenshots oder Dateien bitten.
+- **Feedback vom Kunden** (Knopf oben, ⌥F, Konto-Menü, Lead-Panel, Anzeigefehler, Claude-App): zu Beginn jeder Sitzung
+  `list_feedback` lesen, je Meldung `feedback_detail` (Text, Bildschirmfoto, letzte Schritte, Fehler, Lead). Beim
+  Anfangen `update_feedback` → `in_progress`, nach Merge und Update → `done` mit kurzer Antwort per du
+  („Ist drin, ab jetzt …“). Der Kunde sieht es in der Glocke.
 - Keine Massen-Umformatierungen und keine Dateiumbenennungen ohne Absprache (erzeugen Merge-Konflikte).
 
 ## Abstimmung über Handoff-Dateien
@@ -100,5 +111,15 @@ Zwei Agents auf **einem Rechner**: getrennte Ordner (`git worktree`), nie dersel
 - Keine echten LinkedIn- oder Meta-Aktionen ohne ausdrücklichen Auftrag des Nutzers. Die Schutzgrenzen bleiben:
   Profile pro Lauf und Läufe pro Tag stellt der Nutzer selbst ein (seit 11.10. bis 1000 bzw. 100, vorher fest 25),
   3–8 s Pausen, Abbruch bei Limit- und Zugangsfehlern.
+- **Messen und MCP bei allem Neuen (Nutzer 09.11.: „alles auf Datengrundlage optimieren, wie ein IT-Unternehmen“):**
+  1. **MCP-Schnittstelle mitbauen:** Jede neue Funktion bekommt ein Tool in der Cockpit-Verbindung (`server/src/mcp/`) –
+     lesen und, wo sinnvoll, bedienen – mit Test in `server/test/mcp.test.ts`.
+  2. **Messbar machen:** Jeder neue Knopf/Link/Reiter bekommt ein sprechendes `data-testid` – Klicks werden darüber
+     automatisch gezählt (`src/lib/telemetry.ts`). Neue Tastaturkürzel über `useHotkeys`, neue Ansichten über
+     `state.view`, neue Hintergrund-Jobs über `trackJob(name, …)` (`server/src/telemetry/store.ts`). Fehlen dafür
+     Zahlen im Nutzungs- oder Optimierungs-Bericht, den Bericht erweitern.
+  3. **Nie Inhalte messen:** keine Texte aus Feldern, keine Namen von Leads, keine Geheimnisse.
+  4. **Vor Verbesserungen erst die Daten lesen:** `usage_report` (Oberfläche, Fehler, API, Jobs) und
+     `optimization_report` (Suche, KI, LinkedIn-Abrufe, Lead-Qualität).
 - **Fertig heißt:** verify grün, Handoff-Datei aktualisiert, `README.md`/`PLAN.md` bei geändertem Verhalten angepasst
-  (nur eigener Abschnitt), PR offen, dem Nutzer in 2–3 Sätzen gesagt, was jetzt geht und was die andere Seite wissen muss.
+  (nur eigener Abschnitt), PR offen und gemergt, dem Nutzer in 2–3 Sätzen gesagt, was jetzt geht und was die andere Seite wissen muss.

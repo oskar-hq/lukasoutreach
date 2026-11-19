@@ -35,3 +35,16 @@ Quelle: Call vom 31.10.2026 („DACH LinkedIn Outreach Plan“).
    **Human in the Loop** – jede Nachricht vor dem Senden kurz prüfen (≈ 10 am Tag).
 8. Altlasten entfernen, die für Lukas nichts bedeuten: Meta-Ads-Filter, Kapitalanlage-Zielgruppe
    (`server/src/qualify/targetGroup.ts`), Greenfield/Reactivation-Vorlagen, Close-Übergabe (falls nicht gebraucht).
+
+## Entscheidungen (19.11.2026)
+
+- **Firmen-Kette nach Rang:** Je Firma beliebig viele Kontakte, sortiert von der **höchsten Position abwärts**
+  (Person 1 = ranghöchste). Ziel ist immer der ranghöchste erreichbare Kontakt. **Antwortet jemand, fallen alle
+  Kontakte darunter komplett weg** (Person 2 antwortet → 3, 4, 5 … werden nicht mehr angeschrieben). Ranghöhere, die
+  noch laufen, bleiben dran.
+- **Sprache:** Vorlagen und Nachrichten auf **Deutsch**.
+- **Nur Lukas' LinkedIn-Account** wird genutzt (bei Unipile schon verbunden). Sonst arbeitet voraussichtlich niemand
+  im Cockpit (keine Mitarbeiter-Konten nötig).
+- **Human in the Loop:** Die Software sendet über Unipile, aber jede Nachricht wird vorher von Lukas geprüft.
+- **Kosten/Schlüssel:** Unipile und Anthropic zahlt der Kunde, den Anthropic-Schlüssel liefert er.
+- **Updates aus `oskar-hq/Scraper`:** bis `ff45556` (16.11.) übernommen. Upstream-Branch dort: `claude/lead-suche`.

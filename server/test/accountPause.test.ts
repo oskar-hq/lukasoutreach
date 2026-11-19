@@ -171,7 +171,7 @@ test('Kein Account zugeordnet oder Unipile nicht erreichbar: nichts pausiert; nu
 });
 
 test('Echt senden: Lead von Nick (Account getrennt) geht per Klick über Johannes, Johannes wird Besitzer', async () => {
-  const app = await setup({ LINKEDIN_ACTIONS: 'on', LINKEDIN_PAUSE_SECONDS: '0-0', LINKEDIN_WORK_HOURS: '0-24', LINKEDIN_WORK_DAYS: '1-7' });
+  const app = await setup({ LINKEDIN_ACTIONS: 'on', LINKEDIN_INVITE_MODE: 'instant', LINKEDIN_PAUSE_SECONDS: '0-0', LINKEDIN_WORK_HOURS: '0-24', LINKEDIN_WORK_DAYS: '1-7' });
   const [lead] = await createLeads(app, [card(1)], 'nick');
   const response = await app.inject({ method: 'POST', url: `/api/leads/${lead.id}/linkedin/invite`, payload: {} });
   assert.equal(response.statusCode, 200, response.body);

@@ -67,19 +67,27 @@ export function withinWorkHours(config: Config['linkedin'], now: number): boolea
 
 /** Sekunden bis Mitternacht in der Zeitzone (für Retry-After beim Tageslimit). */
 export function secondsUntilMidnight(now: number, timeZone: string): number {
-  const local = localTime(now, timeZone);
-  return Math.max(1, 24 * 3600 - (local.hour * 3600 + local.minute * 60 + local.second));
+  return Math.max(1, Math.ceil((nextLocalMidnight(now, timeZone) - now) / 1000));
 }
 
-/** Beginn des Kalendertags in der Zeitzone (ms) – „heute“ im Tagesstapel. */
+/**
+ * Beginn des Kalendertags in der Zeitzone (ms) – „heute“ im Tagesstapel. An Tagen mit Zeitumstellung hat der Tag 23
+ * oder 25 Stunden: „jetzt minus Uhrzeit“ läge dann eine Stunde neben Mitternacht (10.11.) – deshalb nachrechnen.
+ */
 export function localDayStart(now: number, timeZone: string): number {
   const local = localTime(now, timeZone);
-  return now - (now % 1000) - (local.hour * 3600 + local.minute * 60 + local.second) * 1000;
+  const start = now - (now % 1000) - (local.hour * 3600 + local.minute * 60 + local.second) * 1000;
+  const at = localTime(start, timeZone);
+  const clock = at.hour * 3600 + at.minute * 60 + at.second;
+  if (clock === 0) return start;
+  // Gleicher Tag, aber z. B. 01:00 (Tag mit 25 h) → zurück; Vortag 23:00 (Tag mit 23 h) → vor.
+  return at.day === local.day ? start - clock * 1000 : start + (24 * 3600 - clock) * 1000;
 }
 
 /** Nächste Mitternacht in der Zeitzone (ms). */
 export function nextLocalMidnight(now: number, timeZone: string): number {
-  return now - (now % 1000) + secondsUntilMidnight(now, timeZone) * 1000;
+  // Mittags plus 24 h liegt immer im nächsten Kalendertag – auch bei 23 oder 25 Stunden.
+  return localDayStart(localDayStart(now, timeZone) + 36 * 3600 * 1000, timeZone);
 }
 
 /** Stabile Zahl je Text – Simulation: welche Anfrage „angenommen“ wird, wer „antwortet“. */
@@ -145,8 +153,17 @@ export class LinkedInGuard {
            AND (a.lead_id IS NULL OR NOT EXISTS (SELECT 1 FROM leads l WHERE l.id = a.lead_id))`,
       )
       .get(founder, since) as { n: number; oldest: number | null };
-    const oldest = [fromEvents.oldest, withoutLead.oldest].filter((at): at is number => at !== null);
-    return { count: fromEvents.n + withoutLead.n, oldest: oldest.length ? Math.min(...oldest) : null };
+    // Von Hand auf LinkedIn gesendet (05.11., vom Abgleich gesehen), solange noch kein Lead daraus wurde – sie zählen
+    // für LinkedIn genauso; mit Lead stehen sie als „Anfrage gesendet“ im Verlauf (oben gezählt).
+    const manual = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n, MIN(s.sent_at) AS oldest FROM linkedin_sent_invites s
+         WHERE s.founder = ? AND s.source IN ('manual', 'logged') AND s.sent_at >= ?
+           AND (s.lead_id IS NULL OR NOT EXISTS (SELECT 1 FROM leads l WHERE l.id = s.lead_id))`,
+      )
+      .get(founder, since) as { n: number; oldest: number | null };
+    const oldest = [fromEvents.oldest, withoutLead.oldest, manual.oldest].filter((at): at is number => at !== null);
+    return { count: fromEvents.n + withoutLead.n + manual.n, oldest: oldest.length ? Math.min(...oldest) : null };
   }
 
   usage(founder: AuthFounderId, now: number): Usage {

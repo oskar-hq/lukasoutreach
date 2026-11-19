@@ -17,6 +17,7 @@ import {
   AUTO_SEARCH_DEFAULT_DAILY_BUDGET_EUR,
   AUTO_SEARCH_DEFAULT_MAX_ROUNDS,
   AUTO_SEARCH_KAPITALANLAGE_PERCENT_DEFAULT,
+  AUTO_SEARCH_RANDOM_MINUTES_MAX,
   AUTO_SEARCH_KAPITALANLAGE_PERCENT_STEP,
   AUTO_SEARCH_MAX_ROUNDS_LIMIT,
 } from '../../../shared/autoSearch';
@@ -44,12 +45,13 @@ const PENDING_RUN_MS = 60_000;
 const SAVED_MS = 4_000;
 
 /** Stelle im Formular, an der eine Meldung erscheint. */
-type Slot = 'days' | 'time' | 'secondTime' | 'keywords' | 'positions' | 'region' | 'maxResults' | 'profile';
+type Slot = 'days' | 'time' | 'secondTime' | 'randomMinutes' | 'keywords' | 'positions' | 'region' | 'maxResults' | 'profile';
 
 const SLOT_SELECTOR: Record<Slot, string> = {
   days: '[data-testid="auto-days"] button',
   time: '[data-testid="auto-time"]',
   secondTime: '[data-testid="auto-second-time"]',
+  randomMinutes: '[data-testid="auto-random-minutes"]',
   keywords: '[data-testid="auto-keywords"] input',
   positions: '[data-testid="auto-positions"] input',
   region: '[data-testid="auto-region"]',
@@ -73,6 +75,7 @@ function toUpdate(schedule: AutoSearchSchedule): AutoSearchUpdate {
     // Noch nie gespeichert → mit KI-Tagesbudget vorbelegen (Geld statt Läufe, Wunsch des Nutzers 11.10.).
     dailyBudgetEur: schedule.dailyBudgetEur !== undefined && (schedule.dailyBudgetEur !== null || schedule.updatedAt !== null) ? schedule.dailyBudgetEur : AUTO_SEARCH_DEFAULT_DAILY_BUDGET_EUR,
     kapitalanlagePercent: schedule.kapitalanlagePercent ?? AUTO_SEARCH_KAPITALANLAGE_PERCENT_DEFAULT,
+    randomMinutes: schedule.randomMinutes ?? 0,
   };
 }
 
@@ -95,6 +98,7 @@ function normalize(update: AutoSearchUpdate): AutoSearchUpdate {
     maxRounds: update.maxRounds ?? AUTO_SEARCH_DEFAULT_MAX_ROUNDS,
     dailyBudgetEur: update.dailyBudgetEur ?? null,
     kapitalanlagePercent: update.kapitalanlagePercent ?? AUTO_SEARCH_KAPITALANLAGE_PERCENT_DEFAULT,
+    randomMinutes: update.randomMinutes ?? 0,
   };
 }
 
@@ -107,7 +111,7 @@ function problemSlot(problem: NonNullable<ReturnType<typeof autoSearchProblem>>)
 
 /** `field` aus einer 400-Antwort, z. B. „days“ oder „profile.maxResults“. */
 function serverSlot(field: string | undefined): Slot | null {
-  if (field === 'days' || field === 'time' || field === 'secondTime') return field;
+  if (field === 'days' || field === 'time' || field === 'secondTime' || field === 'randomMinutes') return field;
   if (!field?.startsWith('profile')) return null;
   const sub = field.split('.')[1];
   return sub === 'keywords' || sub === 'positions' || sub === 'region' || sub === 'maxResults' ? sub : 'profile';
@@ -602,6 +606,27 @@ export function AutoSearchSection({ active }: { active: boolean }) {
                   />
                 </Field>
                 <FieldError id={`${base}-second-time-error`} text={errorAt('secondTime')} testId="auto-second-time-error" />
+              </div>
+              {/* Teammeeting 05.11.: nicht jeden Tag zur selben Minute – z. B. 06:30 + 90 = zwischen 6:30 und 8:00. Seit 06.11.
+                  auch die Pausen zwischen den Läufen fürs Tagesziel (5 bis 90 Minuten). */}
+              <div className="mt-3">
+                <Field label="Zufällig bis zu … Minuten (Start und Pausen)" htmlFor={`${base}-random`}>
+                  <input
+                    id={`${base}-random`}
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    max={AUTO_SEARCH_RANDOM_MINUTES_MAX}
+                    step={5}
+                    value={draft.randomMinutes ?? 0}
+                    onChange={(event) => change({ randomMinutes: Math.max(0, Math.floor(Number(event.target.value) || 0)) })}
+                    aria-invalid={errorAt('randomMinutes') ? true : undefined}
+                    aria-describedby={describe('randomMinutes')}
+                    className={cn(FIELD_INPUT, errorAt('randomMinutes') && 'border-bad/60')}
+                    data-testid="auto-random-minutes"
+                  />
+                </Field>
+                <FieldError id={`${base}-randomMinutes-error`} text={errorAt('randomMinutes')} testId="auto-random-minutes-error" />
               </div>
             </div>
             <div>

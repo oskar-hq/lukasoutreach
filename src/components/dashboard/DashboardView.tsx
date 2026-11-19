@@ -22,6 +22,7 @@ import { CHART, ChartCard, Legend, LegendKey } from './ChartParts';
 import { ActivityChart, RateBarChart, WeeklyCompareChart, type WeekCompare } from './Charts';
 import { AiCostSection } from './AiCostSection';
 import { LearningSection } from './LearningSection';
+import { InviteSection } from './InviteSection';
 import { KpiTile, type KpiTileProps } from './KpiTile';
 import {
   VISIBLE_DAYS,
@@ -80,7 +81,7 @@ function useDashboard() {
   return { load, retry };
 }
 
-type Section = 'overview' | 'templates' | 'team';
+type Section = 'overview' | 'templates' | 'team' | 'invites';
 
 export function DashboardView() {
   const { load, retry } = useDashboard();
@@ -230,9 +231,10 @@ function DashboardContent({ data }: { data: DashboardResponse }) {
             { value: 'overview', label: 'Überblick' },
             { value: 'templates', label: 'Vorlagen' },
             { value: 'team', label: `${FOUNDERS.nick.name} vs. ${FOUNDERS.johannes.name}` },
+            { value: 'invites', label: 'Vernetzen' },
           ]}
         />
-        {section !== 'team' && (
+        {section !== 'team' && section !== 'invites' && (
           <Segmented
             ariaLabel="Gründer filtern"
             size="sm"
@@ -365,6 +367,7 @@ function DashboardContent({ data }: { data: DashboardResponse }) {
         )}
 
         {section === 'team' && <FounderComparison data={data} />}
+        {section === 'invites' && <InviteSection />}
       </motion.div>
     </>
   );

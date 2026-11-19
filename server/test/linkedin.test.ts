@@ -18,6 +18,8 @@ const LIVE: NodeJS.ProcessEnv = {
   LEAD_SEARCH_MODE: 'live',
   UNIPILE_API_KEY: 'unipile-test-key',
   LINKEDIN_ACTIONS: 'on',
+  // Diese Tests prüfen das Senden selbst – ohne Einplanen über den Tag (eigene Tests in inviteFlow.test.ts).
+  LINKEDIN_INVITE_MODE: 'instant',
   UNIPILE_ACCOUNT_NICK: 'acc_nick',
   LINKEDIN_PAUSE_SECONDS: '0-0',
   LINKEDIN_WORK_HOURS: '0-24',
@@ -374,6 +376,28 @@ test('Live: außerhalb der Arbeitszeit nichts senden', async (t) => {
   assert.equal(response.json().error.code, 'linkedin_outside_hours');
   assert.equal((await status(server)).withinWorkHours, false);
   assert.equal(unipile.requests.filter((request) => request.method === 'POST').length, 0);
+});
+
+test('Live: Nachrichten gehen auch außerhalb der Arbeitszeit raus (07.11.)', async (t) => {
+  const unipile = await startFakeUnipile();
+  t.after(() => unipile.close());
+  const dataDir = tempDataDir();
+  // Erst in der Arbeitszeit vernetzen …
+  const during = app({ ...LIVE, UNIPILE_DSN: unipile.baseUrl, DATA_DIR: dataDir, LINKEDIN_WORK_HOURS: '0-24', LINKEDIN_WORK_DAYS: '1-7' });
+  const [lead] = await createLeads(during, [card(3)]);
+  assert.equal((await invite(during, lead.id)).statusCode, 200);
+  unipile.linkedin.relations = [{ member_id: 'ACoTEST3', public_identifier: 'person-3', created_at: Date.now() }];
+  assert.deepEqual((await sync(during)).accepted, [lead.id]);
+  await during.close();
+  // … dann außerhalb: Anfrage gesperrt, Nachricht geht raus.
+  const hour = localTime(Date.now(), 'Europe/Berlin').hour;
+  const after = app({ ...LIVE, UNIPILE_DSN: unipile.baseUrl, DATA_DIR: dataDir, LINKEDIN_WORK_HOURS: hour < 12 ? '20-23' : '1-4' });
+  t.after(() => after.close());
+  const [other] = await createLeads(after, [card(4)]);
+  assert.equal((await invite(after, other.id)).json().error.code, 'linkedin_outside_hours');
+  const response = await message(after, lead.id, 'Danke fürs Vernetzen!');
+  assert.equal(response.statusCode, 200, response.body);
+  assert.equal((response.json() as LeadDetailResponse).lead.stage, 'contacted');
 });
 
 test('Live: zwei Klicks gleichzeitig → genau eine Anfrage', async (t) => {

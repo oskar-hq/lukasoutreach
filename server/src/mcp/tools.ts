@@ -4,14 +4,18 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { AUTH_FOUNDER_IDS, defaultFounderName, type AuthFounderId, type AuthUser } from '../../../shared/auth.js';
 import { LEAD_CATEGORIES } from '../../../shared/leadSearch.js';
+import { LEARNING_REPORT_DAYS_DEFAULT, LEARNING_REPORT_DAYS_MAX } from '../../../shared/learning.js';
+import { USAGE_REPORT_DAYS_DEFAULT, USAGE_REPORT_DAYS_MAX } from '../../../shared/telemetry.js';
 import { LEAD_STAGES, LEAD_STAGE_LABELS, type CockpitLead, type LeadDetailResponse } from '../../../shared/leads.js';
 import type { LinkedInStatusResponse } from '../../../shared/linkedin.js';
 import { MCP_LEAD_PARAM } from '../../../shared/mcp.js';
 import type { TemplatesResponse } from '../../../shared/messages.js';
-import { TASK_TYPE_LABELS, type TasksResponse } from '../../../shared/tasks.js';
+import { ATTENTION_LABELS, TASK_TYPE_LABELS, type AttentionReason, type TasksResponse } from '../../../shared/tasks.js';
 import { CONVERSATIONS_MAX_LIMIT, type AssistantData } from '../assistant/data.js';
 import { internalAuthHeaders } from '../auth/auth.js';
 import { SETTINGS_INSTRUCTIONS, registerSettingsTools } from './settingsTools.js';
+import { registerSystemTools } from './systemTools.js';
+import { registerFeedbackTools } from './feedbackTools.js';
 
 /**
  * Werkzeuge des MCP-Servers (Vertrag `shared/mcp.ts`) für ein angemeldetes Konto. Lesen wie der KI-Assistent
@@ -32,10 +36,15 @@ export interface McpContext {
 const INSTRUCTIONS = `Outreach-Cockpit eines kleinen Teams, das über LinkedIn Kapitalanlage-Vertriebe und Finanzdienstleister anschreibt (früher auch Bauträger). Ablauf je Lead: Vernetzungsanfrage → Erstnachricht → Follow-ups → Antwort → Termin.
 Du kannst alles lesen (Gespräche, Auswertungen, Leads) und das Cockpit bedienen: Aufgaben von heute (todays_tasks) abarbeiten, Anfragen und Nachrichten senden, Antworten eintragen, Termine, Wiedervorlagen, Verloren.
 Arbeitsweise bei Aufgaben: erst lead_detail lesen, für Erstnachrichten und Follow-ups die passende Vorlage (list_templates) nehmen und Platzhalter wie {{vorname}} selbst füllen. Vor jedem Senden den Text dem Nutzer zeigen, außer er hat ausdrücklich gesagt, ohne Rückfrage zu senden. Gesendet wird über den LinkedIn-Account des Lead-Besitzers; ist echtes Senden aus, wird nur eingetragen – dann sag dem Nutzer, dass er selbst auf LinkedIn senden muss.
+Zum Verbessern von Suche, KI-Kosten und Einstufung: optimization_report; für Oberfläche, Fehler, Geschwindigkeit und Jobs: usage_report (beide mit sections eingrenzen). Wenn etwas nicht läuft (keine Leads, Limits voll, KI weg): zuerst system_status, notifications und server_logs. Sagt der Nutzer, dass etwas nicht geht oder anders sein soll, und gibt es keine Einstellung dafür: mit submit_feedback an die Entwickler melden. Nach einem Merge ins Repo: start_update.
 Antworte auf Deutsch, per du. Leads als Markdown-Link wie in den Ergebnissen.
 ${SETTINGS_INSTRUCTIONS}`;
 
 const leadId = z.string().trim().min(1).max(64).describe('ID des Leads (aus den Ergebnissen, „lead_id“)');
+
+/** „Braucht Aufmerksamkeit“ in `todays_tasks`: so viele Einträge ohne Angabe bzw. höchstens je Aufruf. */
+const ATTENTION_DEFAULT = 15;
+const ATTENTION_MAX = 100;
 
 type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
 const ok = (text: string): ToolResult => ({ content: [{ type: 'text', text }] });
@@ -74,11 +83,21 @@ export function createMcpServer(ctx: McpContext): McpServer {
     {
       title: 'Aufgaben von heute',
       description:
-        'Was heute ansteht (wie der Tagesstapel im Cockpit): Antworten, fällige Follow-ups, Erstnachrichten, neue Leads zum Vernetzen, dazu „Braucht Aufmerksamkeit“. Jede Aufgabe mit lead_id und Grund.',
-      inputSchema: { scope: z.enum(['mine', 'all']).optional().describe('mine = eigene Aufgaben (Standard), all = beide Gründer') },
+        'Was heute ansteht (wie der Tagesstapel im Cockpit): Antworten, fällige Follow-ups, Erstnachrichten, neue Leads zum Vernetzen, dazu „Braucht Aufmerksamkeit“ (Anzahl je Grund und die ältesten Einträge). Jede Aufgabe mit lead_id und Grund.',
+      inputSchema: {
+        scope: z.enum(['mine', 'all']).optional().describe('mine = eigene Aufgaben (Standard), all = beide Gründer'),
+        attention_limit: z
+          .number()
+          .int()
+          .min(0)
+          .max(ATTENTION_MAX)
+          .optional()
+          .describe(`Wie viele Einträge aus „Braucht Aufmerksamkeit“ (älteste zuerst, Standard ${ATTENTION_DEFAULT}, höchstens ${ATTENTION_MAX}); mit attention_offset weiterblättern`),
+        attention_offset: z.number().int().min(0).optional().describe('So viele Einträge aus „Braucht Aufmerksamkeit“ überspringen'),
+      },
       annotations: READ,
     },
-    async ({ scope: which }) => {
+    async ({ scope: which, attention_limit, attention_offset }) => {
       const owner = which === 'all' ? 'all' : user.founder;
       const result = await call<TasksResponse>('GET', owner ? `/api/tasks?owner=${owner}` : '/api/tasks');
       if (!result.ok) return fail(result.message);
@@ -98,8 +117,20 @@ export function createMcpServer(ctx: McpContext): McpServer {
         }
       }
       if (attention.length) {
-        lines.push('', `## Braucht Aufmerksamkeit (${attention.length})`);
-        for (const item of attention) lines.push(`- ${linkOf(item.lead)} · ${item.detail} (lead_id: ${item.lead.id})`);
+        // Gekürzt (10.11.): Mit 433 Einträgen war die Antwort 74.712 Zeichen lang – zu groß für die Claude-App.
+        const limit = attention_limit ?? ATTENTION_DEFAULT;
+        const offset = attention_offset ?? 0;
+        const shown = attention.slice(offset, offset + limit);
+        const counts = new Map<AttentionReason, number>();
+        for (const item of attention) counts.set(item.reason, (counts.get(item.reason) ?? 0) + 1);
+        lines.push(
+          '',
+          `## Braucht Aufmerksamkeit (${attention.length})`,
+          [...counts].map(([reason, count]) => `${count} × ${ATTENTION_LABELS[reason] ?? reason}`).join(' · '),
+        );
+        for (const item of shown) lines.push(`- ${linkOf(item.lead)} · ${item.detail} (lead_id: ${item.lead.id})`);
+        const rest = attention.length - offset - shown.length;
+        if (rest > 0) lines.push(`… und ${rest} weitere – mit attention_offset: ${offset + shown.length} weiterblättern (attention_limit bis ${ATTENTION_MAX}).`);
       }
       return ok(lines.join('\n'));
     },
@@ -114,6 +145,67 @@ export function createMcpServer(ctx: McpContext): McpServer {
       annotations: READ,
     },
     async () => ok(links(data.analysis(scope))),
+  );
+
+  // Optimierungs-Bericht (Wunsch des Nutzers 09.11.: „hol dir den Bericht selbst, wenn du ihn brauchst“).
+  server.registerTool(
+    'optimization_report',
+    {
+      title: 'Optimierungs-Bericht',
+      description:
+        'Der Bericht aus Dashboard → „Bericht für Claude (.md)“: KI-Kosten je Zweck und Modell, Läufe der Lead-Suche (auch automatisch) mit Trichter und Fehlern, automatische Suche je Tag, Suchanfragen mit Ertrag, wohin die LinkedIn-Abrufe gingen (Lead-Suche, neue Kontakte, Aufwärmen), Entscheidungen je Treffer, Modellvergleich, Rückmeldungen und was aus den Leads wurde. Ohne Namen. Groß (oft 50–100 KB) – mit sections nur die nötigen Abschnitte holen.',
+      inputSchema: {
+        days: z.number().int().min(1).max(LEARNING_REPORT_DAYS_MAX).optional().describe(`Zeitraum in Tagen (Standard ${LEARNING_REPORT_DAYS_DEFAULT})`),
+        sections: z
+          .array(z.string().trim().min(2).max(80))
+          .max(20)
+          .optional()
+          .describe('Nur Abschnitte, deren Überschrift (## …) eines dieser Wörter enthält, z. B. ["Läufe", "LinkedIn", "Modellvergleich"]. Leer = ganzer Bericht.'),
+      },
+      annotations: READ,
+    },
+    async ({ days, sections }) => {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/learning/report?days=${days ?? LEARNING_REPORT_DAYS_DEFAULT}`,
+        headers: internalAuthHeaders(user.username),
+      });
+      if (response.statusCode >= 400) {
+        const message = (() => {
+          try {
+            return (response.json() as { error?: { message?: string } }).error?.message;
+          } catch {
+            return undefined;
+          }
+        })();
+        return { content: [{ type: 'text' as const, text: message ?? `Fehler ${response.statusCode}` }], isError: true };
+      }
+      return ok(filterReport(response.body, sections));
+    },
+  );
+
+  // Nutzungs-Bericht (09.11., shared/telemetry.ts): wie das Team die Oberfläche benutzt, Fehler, API, Jobs.
+  server.registerTool(
+    'usage_report',
+    {
+      title: 'Nutzungs-Bericht',
+      description:
+        'Wie das Team das Cockpit benutzt: Personen und Geräte, Ansichten mit Verweildauer, Klicks je Knopf (data-testid), Tastaturkürzel, Zeit je Karte im Tagesstapel mit Ausgang, Fehler in der Oberfläche, gescheiterte/langsame Anfragen, API je Route (Anzahl, Fehler, Dauer) und Hintergrund-Jobs (Abgleich, neue Kontakte, Aufwärmen, Sicherung). Ohne Inhalte. Mit sections nur die nötigen Abschnitte holen.',
+      inputSchema: {
+        days: z.number().int().min(1).max(USAGE_REPORT_DAYS_MAX).optional().describe(`Zeitraum in Tagen (Standard ${USAGE_REPORT_DAYS_DEFAULT})`),
+        sections: z.array(z.string().trim().min(2).max(80)).max(20).optional().describe('Nur Abschnitte, deren Überschrift eines dieser Wörter enthält, z. B. ["Klicks", "Jobs"].'),
+      },
+      annotations: READ,
+    },
+    async ({ days, sections }) => {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/telemetry/report?days=${days ?? USAGE_REPORT_DAYS_DEFAULT}`,
+        headers: internalAuthHeaders(user.username),
+      });
+      if (response.statusCode >= 400) return { content: [{ type: 'text' as const, text: `Fehler ${response.statusCode}` }], isError: true };
+      return ok(filterReport(response.body, sections));
+    },
   );
 
   server.registerTool(
@@ -201,7 +293,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
       const status = result.body;
       const lines = [
         `Senden: ${status.mode === 'off' ? 'aus – Aktionen werden nur eingetragen, gesendet wird von Hand auf LinkedIn' : status.mode === 'mock' ? 'Simulation' : 'echt über LinkedIn'}`,
-        `Arbeitszeit: ${status.workHours.fromHour}–${status.workHours.toHour} Uhr (${status.withinWorkHours ? 'gerade innerhalb' : 'gerade außerhalb – echtes Senden geht erst wieder in der Arbeitszeit'})`,
+        `Arbeitszeit: ${status.workHours.fromHour}–${status.workHours.toHour} Uhr (${status.withinWorkHours ? 'gerade innerhalb' : 'gerade außerhalb – Vernetzungsanfragen gehen erst wieder in der Arbeitszeit raus, Nachrichten jederzeit'})`,
         ...status.accounts.map(
           (account) =>
             `- ${defaultFounderName(account.founder)}: ${account.connected ? 'verbunden' : 'kein Account'} · Anfragen heute ${account.invitesToday.used}/${account.invitesToday.limit} · Nachrichten heute ${account.messagesToday.used}/${account.messagesToday.limit}${account.pausedUntil ? ` · pausiert: ${account.pauseReason ?? ''}` : ''}`,
@@ -243,6 +335,12 @@ export function createMcpServer(ctx: McpContext): McpServer {
         ? await call<LeadDetailResponse>('POST', leadPath(lead_id, '/linkedin/invite'), { ...(note ? { message: note } : {}), clientId })
         : await call<LeadDetailResponse>('POST', leadPath(lead_id, '/events'), { action: 'invite_sent', ...(note ? { text: note } : {}), clientId });
       if (!result.ok) return fail(result.message);
+      // Über den Tag verteilt (05.11.): eingeplant, noch nicht gesendet.
+      const queued = real ? result.body.lead.queuedInvite : null;
+      if (queued) {
+        const at = new Date(queued.at).toLocaleString('de-DE', { timeZone: 'Europe/Berlin', weekday: 'short', hour: '2-digit', minute: '2-digit' });
+        return ok(`${after(result.body, `Vernetzungsanfrage eingeplant – geht ${at} Uhr über LinkedIn raus (über den Tag verteilt)`)}`);
+      }
       return ok(`${after(result.body, real ? 'Vernetzungsanfrage über LinkedIn gesendet' : 'Vernetzungsanfrage eingetragen')}${real ? '' : ` Nicht über LinkedIn gesendet – bitte selbst senden: ${lead.body.lead.person.profileUrl ?? 'Profil im Cockpit'}`}`);
     },
   );
@@ -372,6 +470,11 @@ export function createMcpServer(ctx: McpContext): McpServer {
 
   // ── Einstellungen (31.10.) ──────────────────────────────────────────────
   registerSettingsTools(server, call);
+  registerSystemTools(server, call);
+  registerFeedbackTools(server, call, async (url) => {
+    const response = await app.inject({ method: 'GET', url, headers: internalAuthHeaders(user.username) });
+    return { status: response.statusCode, body: response.rawPayload, type: String(response.headers['content-type'] ?? 'application/octet-stream') };
+  });
 
   return server;
 }
@@ -382,6 +485,24 @@ function berlinDate(at: number): string {
 }
 
 /** 8 Uhr deutscher Zeit an diesem Tag (Sommer- und Winterzeit) – wie die Wiedervorlage im Cockpit. */
+/**
+ * Nur die Abschnitte (`## …`) des Berichts, deren Überschrift eines der Wörter enthält (ohne Groß/klein); der Kopf
+ * bis zum ersten Abschnitt bleibt immer. Ohne Wörter: der ganze Bericht.
+ */
+export function filterReport(markdown: string, sections?: readonly string[]): string {
+  const wanted = (sections ?? []).map((word) => word.toLowerCase()).filter(Boolean);
+  if (!wanted.length) return markdown;
+  const parts = markdown.split(/\n(?=## )/);
+  const head = parts[0];
+  const kept = parts.slice(1).filter((part) => {
+    const title = part.slice(0, part.indexOf('\n') === -1 ? undefined : part.indexOf('\n')).toLowerCase();
+    return wanted.some((word) => title.includes(word));
+  });
+  const titles = parts.slice(1).map((part) => part.split('\n')[0].replace(/^## /, ''));
+  if (!kept.length) return `${head}\n\nKein Abschnitt passt zu ${wanted.join(', ')}. Vorhanden: ${titles.join(' · ')}`;
+  return [head, ...kept].join('\n');
+}
+
 export function berlinMorning(day: string): number {
   const guess = Date.parse(`${day}T08:00:00Z`);
   const hour = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Berlin', hour: '2-digit', hourCycle: 'h23' }).format(guess));

@@ -624,7 +624,8 @@ In der `.env` mindestens setzen:
 
 Optional: `UNIPILE_ACCOUNT_ID` (Such-Account; sonst der erste verbundene LinkedIn-Account – bei Sales Navigator einer
 mit Sales Navigator), `UNIPILE_SEARCH_API=sales_navigator` (nur mit Sales-Navigator-Lizenz des Such-Accounts), `UNIPILE_LOCATION_ID` (LinkedIn-ID der Region),
-`ANTHROPIC_MODEL` (Standard `claude-opus-5-5`), `MAX_RESULTS` (Voreinstellung, höchstens 1000), `SEARCH_HITS_PER_RUN`
+`ANTHROPIC_MODEL` (Standard `claude-opus-5-5`), `ANTHROPIC_PRESCREEN_MODEL` (Vorprüfung, Standard `claude-haiku-5-5`),
+`AI_SHADOW_MODEL`/`AI_SHADOW_PERCENT` (Modellvergleich, Standard `claude-haiku-5-5`/10 %), `MAX_RESULTS` (Voreinstellung, höchstens 1000), `SEARCH_HITS_PER_RUN`
 (Suchtreffer pro Lauf, Standard 400, 20–1000 – siehe [KI-Vorprüfung](#ki-vorprüfung-1110)), `QUALIFY_MIN_CONFIDENCE` (Standard 0,6),
 `LEAD_DISTRIBUTION` (`owner` Standard | `balanced`, siehe unten), `AI_USD_EUR_RATE` (Kurs $ → € für die KI-Kosten,
 Standard 0,86), `META_GRAPH_VERSION` (Standard `v26.0`).
@@ -658,6 +659,10 @@ sie werden nie weggelassen: Ist kein Account dafür mehr frei, liest die Suche k
 Profile ab, wie alle Accounts zusammen noch dürfen; der Rest wartet auf den nächsten Lauf („Tageslimit der
 LinkedIn-Accounts erreicht – beim nächsten Lauf dran“). Ist alles verbraucht, startet ein Lauf gar nicht erst
 („Tageslimit aller LinkedIn-Accounts erreicht“). `UNIPILE_ACCOUNT_ID` legt nur fest, welcher Account zuerst drankommt.
+**Account deaktivieren** (03.11.): Einstellungen → LinkedIn → Accounts → „Deaktivieren“ schaltet einen Account mit einem
+Klick ab – keine Suche, keine Profile, keine Firmenseiten, kein Aufwärmen, beim Gründer-Account auch kein Senden und
+kein Abgleich. Grenzen und Platz in der Reihenfolge bleiben gespeichert, „Einschalten“ macht es rückgängig. Sind alle
+Such-Accounts deaktiviert, bricht ein Lauf mit „Alle LinkedIn-Accounts deaktiviert“ ab.
 Mit Sales Navigator suchen nur Accounts, für die Unipile Sales Navigator meldet (und `UNIPILE_ACCOUNT_ID`). Kontakte,
 offene Anfragen und Kontaktgrad der reinen Scraping-Accounts spielen für den Dubletten-Abgleich keine Rolle.
 
@@ -848,6 +853,48 @@ dann bis zu 2 × `NEW_LEADS_PER_DAY` neue Leads; gesperrt wird erst, wenn beide 
 **Antworten und angenommene Anfragen** holt das Backend alle `LINKEDIN_SYNC_MINUTES` (15) Minuten selbst ab
 (nur lesend). Antworten werden nur in Unterhaltungen erkannt, die über das Cockpit begonnen wurden.
 
+### Anfragen von Hand, über den Tag verteilt, Überprüfung (05.11.)
+
+Nach dem Teammeeting vom 05.11. (niedrige Annahmequote, Sorge vor Einschränkungen) arbeitet das Cockpit menschlicher:
+
+- **Wie Anfragen rausgehen** – je Gründer-Account unter Einstellungen → LinkedIn → Accounts (Standard
+  `LINKEDIN_INVITE_MODE`, `spread`): **Über den Tag verteilt** – „Vernetzen“ plant die Anfrage nur ein; der Server
+  schickt sie zu zufälligen Zeiten in der Arbeitszeit, mindestens 6 Minuten auseinander, nie mehr als die Tagesgrenze.
+  Eingeplante Leads verschwinden aus dem Tagesstapel und lassen sich im Lead-Panel zurücknehmen. **Sofort** – wie
+  bisher. **Nur von Hand** (z. B. Testwoche, mit Enddatum) – das Cockpit schickt über diesen Account gar keine Anfragen,
+  auch nicht als Ausweich-Account; vernetzt wird im Sales Navigator.
+- **Von Hand auf LinkedIn (09.11.)** – Karte „Neuer Lead“: **Manuell vernetzt** (Taste M, nur wenn das Cockpit selbst
+  sendet) trägt die Anfrage nur ein; sie zählt in der Statistik als „von Hand“. Follow-up-Karte: **Follow-up getätigt
+  (z. B. Sticker auf LinkedIn)** trägt ein Follow-up ohne Text ein. Eigene Chat-Nachrichten ohne Text (Sticker, Bild,
+  Anhang) übernimmt der Chat-Abgleich als „Sticker oder Anhang (ohne Text)“ – sie zählen als Follow-up.
+- **Arbeitszeit nur für Anfragen (07.11.)** – `LINKEDIN_WORK_HOURS`/`LINKEDIN_WORK_DAYS` begrenzen nur die
+  Vernetzungsanfragen. Nachrichten (Erstnachricht, Follow-up, Antwort) gehen jederzeit raus, sobald man die Aufgabe
+  abarbeitet.
+- **Annahmequote im Dashboard → Vernetzen** – zählt nur Anfragen, die im Zeitraum gesendet wurden, und wie viele davon
+  bis heute angenommen sind. Je Tag: „Angenommen“ = von den an dem Tag gesendeten Anfragen angenommen. Darunter dieselben
+  Zahlen **seit Beginn** (alle Anfragen über den Account).
+- **Anfragen von Hand erkennen** – der Abgleich (alle `LINKEDIN_SYNC_MINUTES` Minuten, nur lesend) liest die offenen,
+  gesendeten Anfragen jedes Gründer-Accounts. Was nicht aus dem Cockpit kam, zählt als „von Hand“: Die Startseite zeigt
+  „heute X von Tagesgrenze“, die Anfragen zählen gegen dieselbe Grenze. Nimmt jemand an, den das Cockpit nicht kennt,
+  wird er übernommen – mit Profil, Firmenseite (über die Scraping-Accounts) und KI-Zusammenfassung, vorhandener
+  LinkedIn-Chat inklusive. Von Hand angefragte immer; Kontakte ohne gesehene Anfrage nur, wenn die KI sie als passend
+  einstuft – die übrigen stehen mit Grund unter „Neue Kontakte“ und lassen sich doch übernehmen. Kontakte von vor dem
+  ersten Abgleich übernimmt nur die Überprüfung.
+- **Überprüfung** – Dashboard → LinkedIn → „Überprüfung starten“: liest die Kontakte der letzten 14 Tage bei LinkedIn
+  und vergleicht mit dem Cockpit (angenommen, aber noch „Anfrage gesendet“ → korrigiert; vernetzt ohne Nachricht →
+  LinkedIn-Chat übernommen oder gemeldet; Kontakte ohne Lead → wie oben). Nur lesend, mit Schutzpausen.
+- **Statistik** – Anfragen je Tag (Cockpit / von Hand) und Annahmequote je Gründer für den Vergleich nach der Testwoche.
+- **„Nur von Hand“ und Aufgaben** – solange ein Gründer nur von Hand vernetzt, zeigt sein Tagesstapel keine Karten
+  „Neuer Lead“; bei verteilter Suche gehen neue Leads an den anderen Gründer. Die Überprüfung liest bei LinkedIn
+  (Kontaktliste, bei Vernetzten ohne Nachricht den Chat) und geht darum höchstens einmal pro Stunde.
+- **Ausgefallener Account** – getrennte oder gesperrte Accounts überspringt die Suche (auch beim Nachschlagen der Region
+  und beim Dubletten-Abgleich); scheitert ein automatischer Lauf trotzdem an Accounts oder Unipile, versucht der Server es
+  bis zu zweimal nach 30 Minuten erneut.
+- **Automatische Suche mit zufälligem Start** – Einstellungen → Automatische Suche: „Zufällig bis zu … Minuten später“
+  (z. B. 06:30 + 90 Minuten = irgendwann zwischen 6:30 und 8:00, jeden Tag anders). Seit 06.11. gilt der Wert auch für
+  die Pausen zwischen den Läufen fürs Tagesziel: jeder weitere Lauf startet zufällig 5 bis 90 Minuten nach dem vorigen,
+  statt alle am Stück.
+
 ### Persönliche Kontakte per Link (19.10.)
 
 Leads → **Kontakt hinzufügen**: den Link zum LinkedIn-Profil von jemandem einfügen, mit dem du schon vernetzt bist. Das
@@ -1004,6 +1051,59 @@ Der Scraper wird mit jeder Rückmeldung treffsicherer – ohne Training, ab dem 
   Hinweise (z. B. „Stichwort X bringt bei ‚Ohne KI qualifizieren‘ mehrfach Finanzberater“). Hinweise setzt die Software
   nicht selbst um.
 - **Datenschutz:** Rückmeldungen gehören zum Lead und werden mit ihm gelöscht (sofort oder nach `LOST_DELETE_DAYS`).
+- **Seit 09.11.:** Leads aus der Suche, die **ohne jeden Kontakt** (keine Anfrage, keine Nachricht) auf „Verloren“ gesetzt
+  werden, zählen automatisch als „passt nicht“ (wieder geöffnet → fällt weg). Das Dashboard erklärt den Abschnitt, zeigt
+  Prozent und Datum je Woche („zu wenig“ unter 5 Bewertungen), **Profilabrufe je qualifiziertem Lead** (letzte 30 Tage)
+  und graut Suchanfragen aus, die seit 14 Tagen nicht mehr gesucht wurden.
+
+### Optimierungs-Bericht und Modell je Zweck (09.11.)
+
+Ziel: weniger LinkedIn-Abrufe je Lead und das günstigste Modell, das reicht.
+
+- **Bericht für Claude:** Dashboard → „KI-Kosten und was die KI gelernt hat“ → **Bericht für Claude (.md)**
+  (`GET /api/learning/report?days=30`, 1–180 Tage). Eine Markdown-Datei mit Rohzahlen ohne Namen und Profil-Links:
+  KI-Kosten je Zweck × Modell (seit 11.10., zeigt auch, wann welches Modell lief), Kosten je Lauf, Suchanfragen mit
+  Seiten/Treffern/Ertrag, LinkedIn-Abrufe je Account und Tag (nur die letzten 14 Tage), Rückmeldungen und was aus den
+  Leads wurde – das gilt alles **rückwirkend**. **Ab dem Update neu:** Trichter je Lauf, Entscheidung je Treffer (Vorprüfung →
+  Profil → Einstufung mit Begründung, 120 Tage) und der Modellvergleich. **Seit 09.11. b:** jeder Lauf mit Gründer,
+  Suchbegriffen und Fehlertext, die automatische Suche je Tag und Gründer („5 Läufe, 0 Leads – warum?“) und **wohin die
+  LinkedIn-Abrufe gingen** (Lead-Suche Profil/Firmenseite, neue Kontakte, Aufwärmen, Suchtreffer – je Tag und Account,
+  120 Tage). Die Datei einfach in einen Chat mit Claude ziehen.
+- **Modell je Zweck:** `ANTHROPIC_PRESCREEN_MODEL` (Standard `claude-haiku-5-5`) für die Vorprüfung der Suchtreffer
+  anhand der Headline, `ANTHROPIC_MODEL` weiter für die Einstufung, Texte, Antworten und den Assistenten. Beides unter
+  Einstellungen → KI-Bewertung.
+- **Modellvergleich:** `AI_SHADOW_PERCENT` (Standard 10, 0 = aus) Prozent der Einstufungen gehen zusätzlich an
+  `AI_SHADOW_MODEL` (Standard `claude-haiku-5-5`), ebenso viele Vorprüfungen zusätzlich an `ANTHROPIC_MODEL` als
+  Gegenprobe. Das Urteil zählt nie, der Bericht zeigt nur die Übereinstimmung und die Abweichungen. Die Zusatzkosten
+  stehen im Dashboard als „Modellvergleich (Test)“.
+
+### Feedback vom Kunden (09.11.)
+
+So schnell wie möglich für den Kunden: **Knopf oben neben der Glocke** (Desktop, Handy, App), **⌥F** von überall (auch
+in offenen Fenstern), „Feedback oder Fehler melden“ im Konto-Menü, „Feedback zu diesem Lead“ im Lead-Panel unter
+„Mehr“, „Fehler melden“ bei Anzeigefehlern – oder einfach in der Claude-App sagen, was nicht geht (`submit_feedback`).
+Ein Textfeld, optional die Art (Etwas geht nicht / Idee / Frage), Senden mit ⌘↵. **Von selbst dabei:** Bildschirmfoto
+der Seite (abwählbar), Ansicht, offener Lead, die letzten 40 Schritte (Klicks, Tasten, Ansichten), Fehler und
+gescheiterte Anfragen der letzten 10 Minuten, Gerät, Version. Eigene Bilder per ⌘V, Ziehen oder „Bild“ (verkleinert
+auf 1600 px). Neue Meldungen stehen bei Gründern/Admins in der Glocke (und in Slack); ändert sich der Stand, sieht der
+Melder es in seiner Glocke und unter „Deine letzten Meldungen“. Entwickler lesen per `list_feedback`/`feedback_detail`
+(mit Bildern) und setzen den Stand per `update_feedback`. Daten: Tabelle `feedback` (Migration 53), Bilder unter
+`DATA_DIR/feedback/<id>/`.
+
+### Nutzungsdaten (09.11.)
+
+Damit sich alles auf Datengrundlage verbessern lässt, misst das Cockpit ohne Inhalte (keine Texte, keine Namen):
+- **Oberfläche** (`src/lib/telemetry.ts` → `POST /api/telemetry/events`, Pakete alle 15 s): Ansichten mit Verweildauer,
+  Klicks auf Elemente mit `data-testid`, Tastaturkürzel, Zeit je Karte im Tagesstapel samt letzter Aktion, Fehler,
+  gescheiterte oder langsame Anfragen (ab 1,5 s), Gerät (Desktop/Mobil/App).
+- **Server:** jede `/api/*`-Anfrage je Tag und Route (Anzahl, Status, Dauer) und Hintergrund-Jobs (LinkedIn-Abgleich,
+  eingeplante Anfragen, neue Kontakte, Aufwärmen, Sicherung) mit Dauer und Fehler.
+- **Bericht:** `GET /api/telemetry/report?days=14` (Markdown), in der Claude-App per `usage_report` (mit `sections`
+  eingrenzbar). Aufbewahrung 90 Tage (Migration 51: `ui_events`, `api_metrics`, `job_runs`).
+- **Selbst nachsehen per Claude-App:** `system_status` (Zustand jetzt: Lead-Suche, Accounts mit Verbrauch heute und
+  wofür, Senden, KI der letzten 24 h, Jobs, Läufe, Update, Speicher; `test: true` testet Anthropic und Unipile live),
+  `notifications` (die Glocke), `server_logs` (Warnungen/Fehler des Backends, Geheimnisse geschwärzt, 14 Tage,
+  Migration 52 `server_logs`). Alles nur für Gründer und Admin.
 
 ### Automatische Lead-Suche
 
@@ -1051,6 +1151,10 @@ Mitarbeiter sehen ihn nicht.
   starten geplante Läufe nicht („übersprungen“ + Neuigkeit) – sonst würden dieselben Profile jeden Tag unbewertet neu
   abgerufen. Bleiben die Leads eines Laufs überwiegend unbewertet (Anthropic nicht erreichbar) und kommt kein Lead
   dazu, steht der Lauf als „fehlgeschlagen: KI-Bewertung fehlgeschlagen …“ da (Neuigkeit), ohne Folgeläufe.
+- **Update zwischen zwei Läufen (10.11.):** Startet der Server in der Pause zwischen zwei Läufen neu (z. B. Update),
+  sucht er danach weiter bis zum Tagesziel – der eingereihte Folgelauf steht in der Datenbank. Bis dahin war nach
+  jedem Update still Schluss für den Tag. Nur am Tag des Termins; ein Lauf, der *während* des Neustarts lief, gilt als
+  abgebrochen (Grund steht unter dem Tagesziel).
 - **Kein Nachholen:** Ist der Server zur geplanten Zeit aus (Update, Neustart), fällt der Lauf aus – der nächste
   kommt am nächsten geplanten Tag. Ein Neustart in derselben Minute startet nicht doppelt. Wartete ein fälliger
   Termin beim Neustart noch (Suche belegt), steht er danach als „übersprungen – Server wurde neu gestartet“ da.

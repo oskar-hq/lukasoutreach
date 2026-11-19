@@ -46,6 +46,8 @@ async function liveSetup(
     UNIPILE_DSN: unipile.baseUrl,
     UNIPILE_API_KEY: 'unipile-test-key',
     ANTHROPIC_API_KEY: 'anthropic-test-key',
+    // Modellvergleich aus: sonst zählten zufällige Zusatzanfragen mit.
+    AI_SHADOW_PERCENT: '0',
     META_ACCESS_TOKEN: 'meta-test-key',
     DATA_DIR: tempDataDir(),
     ...env,
@@ -420,9 +422,57 @@ test('ungültige KI-Ausgabe betrifft nur den einen Lead', async () => {
 test('Modell kommt aus ANTHROPIC_MODEL; Haiku ohne effort', async () => {
   const { run, anthropic } = await liveSetup({}, {}, { ANTHROPIC_MODEL: 'claude-haiku-4-5' });
   await run(3);
-  const body = anthropic.requests[0].body as { model: string; output_config: Record<string, unknown> };
+  const isPrescreen = (r: { body: unknown }) => systemText(r.body).includes('[cockpit:vorpruefung]');
+  const body = anthropic.requests.find((r) => !isPrescreen(r))!.body as { model: string; output_config: Record<string, unknown> };
   assert.equal(body.model, 'claude-haiku-4-5');
   assert.equal('effort' in body.output_config, false);
+  // Vorprüfung (09.11.): eigenes Modell, Standard Haiku 5.5 – kennt effort.
+  const prescreen = anthropic.requests.find(isPrescreen)!.body as { model: string; output_config: Record<string, unknown> };
+  assert.equal(prescreen.model, 'claude-haiku-5-5');
+  assert.equal(prescreen.output_config.effort, 'low');
+});
+
+test('Modellvergleich (09.11.): zusätzliche Anfragen zählen nicht, landen aber im Optimierungs-Bericht', async () => {
+  const { app, run, anthropic } = await liveSetup({}, {}, {
+    ANTHROPIC_MODEL: 'claude-sonnet-5-5',
+    ANTHROPIC_PRESCREEN_MODEL: 'claude-haiku-5-5',
+    AI_SHADOW_MODEL: 'claude-haiku-5-5',
+    AI_SHADOW_PERCENT: '100',
+  });
+  const result = await run(3);
+  assert.equal(result.status, 'done');
+  const isPrescreen = (r: { body: unknown }) => systemText(r.body).includes('[cockpit:vorpruefung]');
+  const models = (filter: (r: { body: unknown }) => boolean) => anthropic.requests.filter(filter).map((r) => (r.body as { model: string }).model);
+  // Vorprüfung mit Haiku, Gegenprobe mit dem Modell der Einstufung.
+  assert.deepEqual(models(isPrescreen), ['claude-haiku-5-5', 'claude-sonnet-5-5']);
+  // Jede Einstufung doppelt: Sonnet zählt, Haiku vergleicht.
+  const qualify = models((r) => !isPrescreen(r));
+  assert.equal(qualify.filter((model) => model === 'claude-sonnet-5-5').length, qualify.filter((model) => model === 'claude-haiku-5-5').length);
+  assert.ok(qualify.length >= 2);
+
+  const dashboard = (await app.inject({ method: 'GET', url: '/api/dashboard' })).json() as { aiCost: { byPurpose: Record<string, number> } };
+  assert.ok('shadow' in dashboard.aiCost.byPurpose, 'Zusatzkosten eigener Posten');
+
+  const report = await app.inject({ method: 'GET', url: '/api/learning/report?days=7' });
+  assert.equal(report.statusCode, 200);
+  assert.match(String(report.headers['content-type']), /text\/markdown/);
+  assert.match(String(report.headers['content-disposition']), /attachment; filename="optimierungs-bericht-\d{4}-\d{2}-\d{2}\.md"/);
+  const text = report.body;
+  assert.match(text, /^# Optimierungs-Bericht/);
+  assert.match(text, /\| Einstufung der Profile \| claude-sonnet-5-5 \| claude-haiku-5-5 \| \d+ \| 100 % \|/);
+  assert.match(text, /\| Vorprüfung der Suchtreffer \| claude-haiku-5-5 \| claude-sonnet-5-5 \|/);
+  assert.match(text, /\| Modell Vorprüfung \| claude-haiku-5-5 \|/);
+  assert.match(text, /\| Modellvergleich \(Test\) \| claude-haiku-5-5 \| \d+ \|/);
+  // Trichter des Laufs und Entscheidungen je Treffer
+  assert.match(text, /\| von Hand \| – \| done \|/);
+  assert.match(text, /### Vorprüfung → Ergebnis/);
+  assert.match(text, /\| likely \| \d+ \| \d+ \|/);
+  // Keine Namen und keine Profil-Links
+  for (const lead of result.leads) {
+    const name = `${lead.hit.firstName} ${lead.hit.lastName}`;
+    assert.ok(!text.includes(name), `Name ${name} im Bericht`);
+    if (lead.hit.profileUrl) assert.ok(!text.includes(lead.hit.profileUrl));
+  }
 });
 
 test('Live-Modus ohne Schlüssel: Oberfläche bekommt verständliche Hinweise, Start wird abgelehnt', async () => {

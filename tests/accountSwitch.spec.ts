@@ -8,6 +8,8 @@ import { resetCockpit, signIn, trackErrors } from './helpers';
  * dort. Die Antwort von `/api/tasks` wird hier verändert, statt 20 Anfragen wirklich einzutragen.
  */
 test.beforeEach(async ({ request }) => resetCockpit(request));
+// Noch laufende Routen am Testende (Stapel auffrischen, Lead nachladen) nicht als Fehler werten – Playwrights Empfehlung.
+test.afterEach(async ({ page }) => page.unrouteAll({ behavior: 'ignoreErrors' }));
 
 const currentCard = (page: Page) => page.locator('[data-testid=stack-card]').last();
 
@@ -16,14 +18,26 @@ const VIA_JOHANNES = { sentBy: 'johannes' as const, invitationId: null, invitedA
 async function withSwitchedAccount(page: Page, via: 'johannes' | null) {
   const switched = new Set<string>();
   // Die Karte lädt den Lead einzeln nach – auch dort über Johannes.
-  await page.route(/\/api\/leads\/[^/?]+$/, async (route) => {
-    if (route.request().method() !== 'GET') return route.fallback();
-    const response = await route.fetch();
-    const body = (await response.json()) as { lead?: { id: string; linkedin?: unknown } };
-    if (body.lead && switched.has(body.lead.id)) body.lead.linkedin = VIA_JOHANNES;
-    await route.fulfill({ response, json: body });
-  });
-  await page.route('**/api/tasks*', async (route) => {
+  // Der Test kann fertig sein, während noch eine Anfrage unterwegs ist (Lead nachladen, Stapel auffrischen) – dann
+  // scheitert `route.fetch()` an der geschlossenen Seite. Das ist kein Fehler der Oberfläche (10.11., langsamer Rechner).
+  const untilClosed = async (work: () => Promise<void>) => {
+    try {
+      await work();
+    } catch (error) {
+      // Seite oder Kontext schon zu („has been closed“, „disposed“) – kein Fehler der Oberfläche.
+      if (!page.isClosed() && !/closed|disposed/i.test(String(error))) throw error;
+    }
+  };
+  await page.route(/\/api\/leads\/[^/?]+$/, (route) =>
+    untilClosed(async () => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      const response = await route.fetch();
+      const body = (await response.json()) as { lead?: { id: string; linkedin?: unknown } };
+      if (body.lead && switched.has(body.lead.id)) body.lead.linkedin = VIA_JOHANNES;
+      await route.fulfill({ response, json: body });
+    }),
+  );
+  await page.route('**/api/tasks*', (route) => untilClosed(async () => {
     const response = await route.fetch();
     const body = (await response.json()) as TasksResponse;
     body.inviteVia = via;
@@ -38,7 +52,7 @@ async function withSwitchedAccount(page: Page, via: 'johannes' | null) {
       switched.add(task.lead.id);
     }
     await route.fulfill({ response, json: body });
-  });
+  }));
 }
 
 test('Eigener Account voll: Karte nennt den Account von Johannes, Erstnachricht ebenso', async ({ page }) => {

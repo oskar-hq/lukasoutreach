@@ -8,7 +8,7 @@ import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { openDatabase } from '../src/db/database.js';
 import { MemoryAccountUsage } from '../src/linkedin/accountUsage.js';
-import { WarmupService } from '../src/linkedin/warmup.js';
+import { WARMUP_NOT_FOUND_REASON, WarmupService } from '../src/linkedin/warmup.js';
 import { startFakeUnipile } from './fakeServers.js';
 import { tempDataDir } from './helpers.js';
 
@@ -215,4 +215,66 @@ test('Aufwärmen (27.10.): beide Zielgruppen gemischt – je zur Hälfte Finanzd
   assert.equal(sent.length, 6);
   assert.deepEqual(sent.slice(0, 3).sort(), ['ACoTEST4', 'ACoTEST5', 'ACoTEST6']);
   assert.deepEqual(sent.slice(3).sort(), ['ACoTEST1', 'ACoTEST2', 'ACoTEST3']);
+});
+
+test('Account deaktiviert (03.11.): kein Aufwärmen, beim Gründer kein Abgleich – wieder eingeschaltet geht alles wie vorher', async () => {
+  const server = buildApp({
+    config: loadConfig({ LEAD_SEARCH_MODE: 'mock', DATA_DIR: tempDataDir(), MOCK_SPEED: '0', AUTH_COOKIE_SECURE: 'false', UNIPILE_WARMUP_ACCOUNTS: 'mock-scraper' }),
+    adapter: new MockAdapter(0),
+    logger: false,
+    requireSession: false,
+  });
+  await server.ready();
+  const put = (url: string, payload: object) => server.inject({ method: 'PUT', url, payload });
+  const warmupLimit = async () => ((await server.inject({ method: 'GET', url: '/api/linkedin/warmup' })).json() as LinkedInWarmupResponse).accounts[0].limitToday;
+
+  assert.equal((await put('/api/linkedin/accounts/mock-scraper/disabled', { disabled: true })).statusCode, 200);
+  assert.equal(await warmupLimit(), 0);
+  assert.equal((await put('/api/linkedin/accounts/mock-nick/disabled', { disabled: true })).statusCode, 200);
+  const sync = (await server.inject({ method: 'POST', url: '/api/linkedin/sync' })).json() as { problems: string[] };
+  assert.ok(sync.problems.some((problem) => problem.includes('deaktiviert')), JSON.stringify(sync.problems));
+
+  await put('/api/linkedin/accounts/mock-scraper/disabled', { disabled: false });
+  await put('/api/linkedin/accounts/mock-nick/disabled', { disabled: false });
+  assert.equal(await warmupLimit(), 6);
+  const again = (await server.inject({ method: 'POST', url: '/api/linkedin/sync' })).json() as { problems: string[] };
+  assert.ok(!again.problems.some((problem) => problem.includes('deaktiviert')));
+  await server.close();
+});
+
+test('Aufwärmen (10.11.): Account gibt es bei Unipile nicht mehr → pausiert, keine Person verbraucht; einzelne unbekannte Person wird gemerkt', async (t) => {
+  const { warmup, invites, unipile, close } = await setup({}, [1, 2, 3, 4], []);
+  t.after(close);
+  await warmup.tick(START);
+  // Jede Anfrage über den Account: 404 – wie bei einer ID in der Aufwärm-Liste, die Unipile nicht mehr kennt.
+  unipile.linkedin.inviteFailByAccount.acc_warm = { status: 404, type: 'errors/resource_not_found' };
+  await warmup.tick(START);
+  assert.equal(invites().length, 3, 'drei Versuche, dann Schluss');
+  let status = warmup.status(START);
+  assert.equal(status.poolLeft, 4, 'niemand als „übersprungen“ verbraucht');
+  assert.equal(status.accounts[0].pauseReason, WARMUP_NOT_FOUND_REASON);
+  assert.ok(status.accounts[0].pausedUntil! >= START + 6 * HOUR);
+  assert.match(warmup.lastFailure ?? '', /pausiert/);
+
+  // Account geht wieder; eine einzelne Person findet LinkedIn nicht → die wird gemerkt, die nächste bekommt die Anfrage.
+  delete unipile.linkedin.inviteFailByAccount.acc_warm;
+  unipile.linkedin.failNext = { status: 404, type: 'errors/resource_not_found' };
+  await warmup.tick(START + 7 * HOUR);
+  await warmup.tick(START + 7 * HOUR);
+  status = warmup.status(START + 7 * HOUR);
+  assert.equal(status.accounts[0].sentToday, 1);
+  assert.equal(status.poolLeft, 2, 'eine gesendet, eine nicht gefunden');
+  assert.equal(warmup.lastFailure, null);
+});
+
+test('Aufwärmen (10.11.): keine Unipile-Sitzung pausiert den Account, die Person bleibt frei', async (t) => {
+  const { warmup, unipile, close } = await setup({}, [1, 2], []);
+  t.after(close);
+  await warmup.tick(START);
+  unipile.linkedin.failNext = { status: 503, type: 'errors/no_client_session' };
+  await warmup.tick(START);
+  const status = warmup.status(START);
+  assert.equal(status.poolLeft, 2, 'Person nicht verbraucht');
+  assert.ok(status.accounts[0].pausedUntil! > START);
+  assert.equal(status.accounts[0].sentToday, 0);
 });

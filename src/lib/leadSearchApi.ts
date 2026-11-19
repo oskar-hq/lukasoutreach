@@ -60,11 +60,21 @@ import type {
 } from '../../shared/settings';
 import type { CreateTemplateRequest, MessageSuggestion, MessageTemplate, SuggestRequest, TemplatesResponse, UpdateTemplateRequest } from '../../shared/messages';
 import type { DashboardResponse } from '../../shared/dashboard';
-import type { LearningSummary } from '../../shared/learning';
+import { LEARNING_REPORT_DAYS_DEFAULT, type LearningSummary } from '../../shared/learning';
+import type { TelemetryBatch } from '../../shared/telemetry';
+import type { FeedbackCreateRequest, FeedbackItem, FeedbackListResponse } from '../../shared/feedback';
 import type {
   LinkedInAccountsResponse,
+  LinkedInAuditRequest,
+  LinkedInAuditStatus,
+  LinkedInInviteModeRequest,
+  LinkedInInviteStatsResponse,
+  LinkedInManualInvitesResponse,
+  LinkedInNewContact,
+  LinkedInNewContactsResponse,
   LinkedInWarmupResponse,
   LinkedInAccountLimits,
+  LinkedInAccountDisabledRequest,
   LinkedInInviteRequest,
   ChatSyncRequest,
   ChatSyncStatus,
@@ -119,17 +129,56 @@ function reportUnauthorized(url: string, status: number, code: string | undefine
   for (const listener of unauthorizedListeners) listener();
 }
 
+// ── Nutzungsdaten (shared/telemetry.ts) ──────────────────────────────────────
+type ApiResultListener = (result: { url: string; method: string; status: number; ms: number }) => void;
+const apiResultListeners = new Set<ApiResultListener>();
+
+/** Jede Anfrage über `call`/`fetchFile` meldet Ergebnis und Dauer (für `lib/telemetry.ts`). Abbrüche nicht. */
+export function onApiResult(listener: ApiResultListener): () => void {
+  apiResultListeners.add(listener);
+  return () => apiResultListeners.delete(listener);
+}
+
+function reportApiResult(url: string, init: RequestInit | undefined, status: number, started: number): void {
+  if (init?.signal?.aborted) return;
+  const result = { url, method: init?.method ?? 'GET', status, ms: Math.round(performance.now() - started) };
+  for (const listener of apiResultListeners) {
+    try {
+      listener(result);
+    } catch {
+      // Messen ist Beiwerk.
+    }
+  }
+}
+
+/**
+ * Nutzungsdaten senden – nie über `call` (kein Fehler, keine Meldung bei Problemen, keine Endlosschleife).
+ * `keepalive`, damit das letzte Paket auch beim Schließen des Tabs ankommt.
+ */
+export const telemetryApi = {
+  send: (batch: TelemetryBatch): void => {
+    try {
+      void fetch('/api/telemetry/events', { method: 'POST', body: JSON.stringify(batch), headers: { 'Content-Type': 'application/json' }, keepalive: true }).catch(() => undefined);
+    } catch {
+      // egal
+    }
+  },
+};
+
 async function call<T>(url: string, init?: RequestInit): Promise<T> {
   let response: Response;
+  const started = performance.now();
   try {
     response = await fetch(url, {
       ...init,
       headers: init?.body ? { 'Content-Type': 'application/json' } : undefined,
     });
   } catch {
+    reportApiResult(url, init, 0, started);
     throw new ApiError('offline', 'Backend nicht erreichbar.', 0);
   }
   const body = (await response.json().catch(() => null)) as (T & Partial<ApiErrorBody>) | null;
+  reportApiResult(url, init, response.status, started);
   if (!response.ok || !body) {
     // Fastify antwortet auf unbekannte Routen mit `error: "Not Found"` (Text statt Objekt).
     const error = typeof body?.error === 'object' ? body.error : undefined;
@@ -145,11 +194,14 @@ const request = <T,>(path: string, init?: RequestInit) => call<T>(`${BASE}${path
 /** Datei vom Backend holen (Sicherung, Auskunft) – Fehler wie bei `call`. */
 async function fetchFile(url: string, init: RequestInit): Promise<Blob> {
   let response: Response;
+  const started = performance.now();
   try {
     response = await fetch(url, init);
   } catch {
+    reportApiResult(url, init, 0, started);
     throw new ApiError('offline', 'Backend nicht erreichbar.', 0);
   }
+  reportApiResult(url, init, response.status, started);
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as Partial<ApiErrorBody> | null;
     const error = typeof body?.error === 'object' ? body.error : undefined;
@@ -337,6 +389,12 @@ export const boardApi = {
 };
 
 /** Neuigkeiten vom Programm (`shared/notifications.ts`): Glocke oben rechts. */
+/** Feedback vom Kunden (`shared/feedback.ts`, 09.11.). */
+export const feedbackApi = {
+  create: (body: FeedbackCreateRequest) => call<FeedbackItem>('/api/feedback', { method: 'POST', body: JSON.stringify(body) }),
+  mine: () => call<FeedbackListResponse>('/api/feedback?mine=1&limit=20'),
+};
+
 export const notificationsApi = {
   list: (options: RequestOptions = {}) => call<NotificationListResponse>('/api/notifications', options),
   /** Alles bis jetzt gilt als gesehen – Antwort ist die neue Liste. */
@@ -390,6 +448,8 @@ export const dashboardApi = {
 /** Was der Scraper aus Rückmeldungen zur Lead-Qualität gelernt hat (`shared/learning.ts`). */
 export const learningApi = {
   get: (options: RequestOptions = {}) => call<LearningSummary>('/api/learning', options),
+  /** Optimierungs-Bericht als Markdown-Datei (`shared/learning.ts`, 09.11.) – zum Einfügen in einen Chat mit Claude. */
+  report: (days = LEARNING_REPORT_DAYS_DEFAULT): Promise<Blob> => fetchFile(`/api/learning/report?days=${days}`, {}),
 };
 
 export const enrichmentApi = {
@@ -415,6 +475,9 @@ export const linkedinApi = {
   /** Eigene Tagesgrenzen eines Accounts (null = Standard). */
   accountLimits: (id: string, limits: Partial<LinkedInAccountLimits>) =>
     call<LinkedInAccountLimits>(`/api/linkedin/accounts/${encodeURIComponent(id)}/limits`, { method: 'PUT', body: JSON.stringify(limits) }),
+  /** Account mit einem Klick deaktivieren bzw. wieder einschalten (03.11.) – dann kein Traffic mehr darüber. */
+  accountDisabled: (id: string, disabled: boolean) =>
+    call<LinkedInAccountDisabledRequest>(`/api/linkedin/accounts/${encodeURIComponent(id)}/disabled`, { method: 'PUT', body: JSON.stringify({ disabled }) }),
   /** Accounts aufwärmen (21.10.): Stand je Aufwärm-Account. */
   warmup: () => call<LinkedInWarmupResponse>('/api/linkedin/warmup'),
   /** Genau eine Test-Anfrage (z. B. an einen Kollegen). */
@@ -433,6 +496,21 @@ export const linkedinApi = {
     call<LinkedInTestMessageResponse>('/api/linkedin/test-message', { method: 'POST', body: JSON.stringify(body) }),
   /** Pause eines Accounts aufheben. */
   resume: (body: LinkedInResumeRequest) => call<LinkedInStatusResponse>('/api/linkedin/resume', { method: 'POST', body: JSON.stringify(body) }),
+  /** Wie Anfragen über einen Gründer-Account rausgehen (05.11.): verteilt, sofort, nur von Hand. */
+  inviteMode: (id: string, body: LinkedInInviteModeRequest) =>
+    call<LinkedInInviteModeRequest>(`/api/linkedin/accounts/${encodeURIComponent(id)}/invite-mode`, { method: 'PUT', body: JSON.stringify(body) }),
+  /** Eingeplante Anfrage zurücknehmen (05.11.). */
+  cancelInvite: (id: string) => call<LeadDetailResponse>(leadUrl(id, '/linkedin/invite'), { method: 'DELETE' }),
+  /** Neue Kontakte aus LinkedIn (übernommen oder aussortiert) und „doch übernehmen“. */
+  newContacts: () => call<LinkedInNewContactsResponse>('/api/linkedin/new-contacts'),
+  importContact: (id: string) => call<LinkedInNewContact>(`/api/linkedin/new-contacts/${encodeURIComponent(id)}/import`, { method: 'POST' }),
+  /** Überprüfung „wurde etwas übersehen?“ – startet im Hintergrund, Stand per `auditStatus`. */
+  audit: (body: LinkedInAuditRequest = {}) => call<LinkedInAuditStatus>('/api/linkedin/audit', { method: 'POST', body: JSON.stringify(body) }),
+  auditStatus: () => call<LinkedInAuditStatus>('/api/linkedin/audit'),
+  /** Anfragen je Tag und Annahmequote. */
+  inviteStats: (days = 14) => call<LinkedInInviteStatsResponse>(`/api/linkedin/invite-stats?days=${days}`),
+  /** Anfragen von Hand mit Stand – wer hat angenommen? (06.11.) */
+  manualInvites: (days = 14) => call<LinkedInManualInvitesResponse>(`/api/linkedin/manual-invites?days=${days}`),
 };
 
 /** Sicherungen und Updates (`shared/system.ts`) – nur Admin und Gründer. */

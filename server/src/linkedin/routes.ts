@@ -10,11 +10,20 @@ import {
   type LinkedInAccountsResponse,
   type LinkedInWarmupResponse,
   type LinkedInAccountLimits,
+  type LinkedInAccountDisabledRequest,
   type LinkedInTestInviteResponse,
   type LinkedInTestConnectResponse,
   type LinkedInTestMessageResponse,
   type LinkedInTestProfileResponse,
+  LINKEDIN_AUDIT_DAYS_DEFAULT,
+  LINKEDIN_AUDIT_DAYS_MAX,
+  LINKEDIN_INVITE_MODES,
+  type LinkedInInviteModeRequest,
+  type LinkedInNewContactsResponse,
+  type LinkedInManualInvitesResponse,
 } from '../../../shared/linkedin.js';
+import type { ConnectionStore, NewContactImporter } from './connections.js';
+import type { LinkedInAudit } from './audit.js';
 import { DuplicateEventError, LeadNotFoundError, type LeadStore } from '../leads/leadStore.js';
 import { ROLE_MESSAGES, actingFounder, actorFor, assistantDenial } from '../auth/roles.js';
 import type { FounderAccounts } from './founderAccounts.js';
@@ -23,6 +32,10 @@ import type { WarmupService } from './warmup.js';
 import { ACCOUNT_LIMIT_MAX, type AccountPrefsStore } from './accountPrefs.js';
 
 const AccountIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
+const AccountDisabledSchema = z.object({ disabled: z.boolean() });
+const InviteModeSchema = z.object({ mode: z.enum(LINKEDIN_INVITE_MODES as [string, ...string[]]), until: z.number().int().positive().nullable().optional() });
+const AuditSchema = z.object({ days: z.number().int().min(1).max(LINKEDIN_AUDIT_DAYS_MAX).optional() });
+const StatsQuery = z.object({ days: z.coerce.number().int().min(1).max(60).optional() });
 const AccountOrderSchema = z.object({ ids: z.array(AccountIdSchema).max(50) });
 const limitField = (max: number) => z.number().int().min(0).max(max).nullable().optional();
 const AccountLimitsSchema = z
@@ -104,7 +117,19 @@ export function registerLinkedInRoutes(
     founderAccounts,
     warmup,
     accountPrefs,
-  }: { leads: LeadStore; linkedin: LinkedInService; founderAccounts?: FounderAccounts; warmup?: WarmupService; accountPrefs?: AccountPrefsStore },
+    connections,
+    importer,
+    audit,
+  }: {
+    leads: LeadStore;
+    linkedin: LinkedInService;
+    founderAccounts?: FounderAccounts;
+    warmup?: WarmupService;
+    accountPrefs?: AccountPrefsStore;
+    connections?: ConnectionStore;
+    importer?: NewContactImporter;
+    audit?: LinkedInAudit;
+  },
 ) {
   const detail = (id: string): LeadDetailResponse => ({ lead: leads.get(id)!, events: leads.events(id) });
 
@@ -191,6 +216,88 @@ export function registerLinkedInRoutes(
     const { profilesPerDay, searchResultsPerDay, invitesPerDay } = accountPrefs.setLimits(id.data, body.data);
     const result: LinkedInAccountLimits = { profilesPerDay, searchResultsPerDay, invitesPerDay };
     return result;
+  });
+
+  // Account deaktivieren (03.11.): ein Klick, kein Traffic mehr darüber – gleiche Rechte wie die Account-Liste.
+  app.put('/api/linkedin/accounts/:id/disabled', async (request, reply) => {
+    const id = AccountIdSchema.safeParse((request.params as { id?: string }).id);
+    const body = AccountDisabledSchema.safeParse(request.body ?? {});
+    if (!id.success || !body.success || !accountPrefs) return sendError(reply, 400, 'invalid_request', 'Bitte angeben, ob der Account deaktiviert sein soll.');
+    accountPrefs.setDisabled(id.data, body.data.disabled);
+    request.log.info({ accountId: id.data, disabled: body.data.disabled }, 'LinkedIn-Account ein-/ausgeschaltet');
+    const result: LinkedInAccountDisabledRequest = { disabled: body.data.disabled };
+    return result;
+  });
+
+  // Wie Anfragen über einen Gründer-Account rausgehen (05.11.): über den Tag verteilt, sofort oder nur von Hand.
+  app.put('/api/linkedin/accounts/:id/invite-mode', async (request, reply) => {
+    const id = AccountIdSchema.safeParse((request.params as { id?: string }).id);
+    const body = InviteModeSchema.safeParse(request.body ?? {});
+    if (!id.success || !body.success || !accountPrefs) {
+      return sendError(reply, 400, 'invalid_request', 'Bitte „spread“, „instant“ oder „manual“ angeben – bei „manual“ optional ein Ende (ms).');
+    }
+    const mode = body.data.mode as LinkedInInviteModeRequest['mode'];
+    const until = mode === 'manual' ? (body.data.until ?? null) : null;
+    if (until !== null && until <= Date.now()) return sendError(reply, 400, 'invalid_request', 'Das Ende muss in der Zukunft liegen.');
+    const assigned = AUTH_FOUNDER_IDS.some((founder) => linkedin.accountOf(founder) === id.data);
+    if (!assigned) return sendError(reply, 409, 'linkedin_no_account', 'Dieser Account gehört keinem Gründer – über ihn gehen keine Anfragen raus.');
+    accountPrefs.setInviteMode(id.data, mode, until);
+    request.log.info({ accountId: id.data, mode, until }, 'Anfragen-Modus des LinkedIn-Accounts geändert');
+    const result: LinkedInInviteModeRequest = { mode, until };
+    return result;
+  });
+
+  // Neue Kontakte aus LinkedIn (05.11.): Liste und „doch übernehmen“.
+  app.get('/api/linkedin/new-contacts', async (): Promise<LinkedInNewContactsResponse> => ({ contacts: connections?.list(200) ?? [] }));
+
+  app.post('/api/linkedin/new-contacts/:id/import', async (request, reply) => {
+    const params = IdParams.safeParse(request.params);
+    const contact = params.success ? connections?.contact(params.data.id) : null;
+    if (!contact || !importer || !connections) return sendError(reply, 404, 'not_found', 'Diesen Kontakt gibt es nicht (mehr).');
+    if (contact.status !== 'imported') {
+      await importer.importOne(contact.id, true);
+      request.log.info({ contact: contact.id, by: request.authUser?.username }, 'Neuer LinkedIn-Kontakt von Hand übernommen');
+    }
+    return connections.contact(contact.id);
+  });
+
+  // Überprüfung „wurde etwas übersehen?“ (05.11.): läuft im Hintergrund, Stand per GET.
+  app.get('/api/linkedin/audit', async (_request, reply) => {
+    if (!audit) return sendError(reply, 409, 'linkedin_off', 'Die Überprüfung ist hier nicht eingerichtet.');
+    return audit.status;
+  });
+
+  app.post('/api/linkedin/audit', async (request, reply) => {
+    const body = AuditSchema.safeParse(request.body ?? {});
+    if (!body.success) return sendError(reply, 400, 'invalid_request', `Zeitraum 1 bis ${LINKEDIN_AUDIT_DAYS_MAX} Tage.`);
+    if (!audit || !linkedin.watching) {
+      return sendError(reply, 409, 'linkedin_off', 'Unipile ist nicht eingerichtet – trag Adresse und Token unter Einstellungen → LinkedIn (Unipile) ein.');
+    }
+    const wait = audit.cooldownLeft();
+    if (wait > 0) {
+      const minutes = Math.ceil(wait / 60_000);
+      return sendError(reply, 429, 'linkedin_limit', `Die Überprüfung liest bei LinkedIn – höchstens einmal pro Stunde. Wieder möglich in ${minutes} ${minutes === 1 ? 'Minute' : 'Minuten'}.`, Math.ceil(wait / 1000));
+    }
+    const { started } = audit.start(body.data.days ?? LINKEDIN_AUDIT_DAYS_DEFAULT);
+    if (started) request.log.info({ days: body.data.days ?? LINKEDIN_AUDIT_DAYS_DEFAULT, by: request.authUser?.username }, 'LinkedIn-Überprüfung gestartet');
+    return reply.status(started ? 202 : 200).send(audit.status);
+  });
+
+  // Anfragen von Hand mit Stand (06.11.): wer hat angenommen?
+  app.get('/api/linkedin/manual-invites', async (request, reply) => {
+    const query = StatsQuery.safeParse(request.query ?? {});
+    if (!query.success) return sendError(reply, 400, 'invalid_request', 'Zeitraum 1 bis 60 Tage.');
+    const days = query.data.days ?? 14;
+    const body: LinkedInManualInvitesResponse = { days, invites: connections?.manualList(Date.now() - days * 24 * 60 * 60 * 1000) ?? [] };
+    return body;
+  });
+
+  // Statistik der Anfragen je Tag (05.11.).
+  app.get('/api/linkedin/invite-stats', async (request, reply) => {
+    const query = StatsQuery.safeParse(request.query ?? {});
+    if (!query.success) return sendError(reply, 400, 'invalid_request', 'Zeitraum 1 bis 60 Tage.');
+    if (!audit) return sendError(reply, 409, 'linkedin_off', 'Die Statistik ist hier nicht eingerichtet.');
+    return audit.stats(query.data.days ?? 14);
   });
 
   // Accounts aufwärmen (21.10.): Stand je Account – gleiche Rechte wie die Account-Liste.
@@ -315,6 +422,7 @@ export function registerLinkedInRoutes(
       try {
         const contact = await linkedin.lookupContact(owner, identifier);
         result = { ...leads.createContact(contact, owner, Date.now(), actorFor(user, owner)), imported: 0, chatFailed: false };
+        if (result.created) connections?.recordContactInvite(owner, result.lead, result.lead.createdAt);
         // Vernetzt: bestehende Unterhaltung gleich mitnehmen (Wunsch des Nutzers 19.10.).
         if (result.created && result.lead.stage === 'connected') {
           const chat = await linkedin.importContactChat(result.lead.id);
@@ -365,6 +473,13 @@ export function registerLinkedInRoutes(
         throw error;
       }
     });
+  });
+
+  // Eingeplante Anfrage zurücknehmen (05.11.).
+  app.delete('/api/leads/:id/linkedin/invite', async (request, reply) => {
+    const params = IdParams.safeParse(request.params);
+    if (!params.success) return sendError(reply, 404, 'not_found', 'Lead nicht gefunden.');
+    return handle(reply, params.data.id, async () => linkedin.cancelQueuedInvite(params.data.id));
   });
 
   app.post('/api/leads/:id/linkedin/message', async (request, reply) => {

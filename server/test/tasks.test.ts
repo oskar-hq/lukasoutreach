@@ -269,6 +269,25 @@ test('„Heute“ nach Ortszeit: Tagesanfang und Mitternacht in Europe/Berlin', 
   assert.equal(computeTasks(leads, 'nick', rules, now, { nick: 1 }, localDayStart(now, 'Europe/Berlin')).counts.lead, 1);
 });
 
+test('Tagesanfang an Tagen mit Zeitumstellung (10.11.): 25 und 23 Stunden – Mitternacht bleibt Mitternacht', async () => {
+  const { localDayStart, nextLocalMidnight, secondsUntilMidnight } = await import('../src/linkedin/guard.js');
+  const zone = 'Europe/Berlin';
+  // 25.10.2026 (Uhr eine Stunde zurück, 25 h): 12:00 MEZ = 11:00 UTC; Mitternacht war 00:00 MESZ = 24.10. 22:00 UTC.
+  const autumn = Date.UTC(2026, 9, 25, 11, 0);
+  assert.equal(localDayStart(autumn, zone), Date.UTC(2026, 9, 24, 22, 0));
+  assert.equal(nextLocalMidnight(autumn, zone), Date.UTC(2026, 9, 25, 23, 0));
+  assert.equal(secondsUntilMidnight(autumn, zone), 12 * 3600);
+  // Vor der Umstellung am selben Tag (01:30 MESZ): 23,5 Stunden bis Mitternacht.
+  assert.equal(nextLocalMidnight(Date.UTC(2026, 9, 24, 23, 30), zone), Date.UTC(2026, 9, 25, 23, 0));
+  assert.equal(secondsUntilMidnight(Date.UTC(2026, 9, 24, 23, 30), zone), 23.5 * 3600);
+  // 28.03.2027 (Uhr eine Stunde vor, 23 h): 12:00 MESZ = 10:00 UTC; Mitternacht war 00:00 MEZ = 27.03. 23:00 UTC.
+  const spring = Date.UTC(2027, 2, 28, 10, 0);
+  assert.equal(localDayStart(spring, zone), Date.UTC(2027, 2, 27, 23, 0));
+  assert.equal(nextLocalMidnight(spring, zone), Date.UTC(2027, 2, 28, 22, 0));
+  // Normale Tage unverändert.
+  assert.equal(secondsUntilMidnight(Date.UTC(2026, 9, 5, 22, 30), zone), 23.5 * 3600);
+});
+
 test('Route: neue Antwort hebt das Überspringen auf', async () => {
   const app = mockApp();
   const tasks = async () => (await app.inject({ method: 'GET', url: '/api/tasks?owner=nick' })).json() as TasksResponse;

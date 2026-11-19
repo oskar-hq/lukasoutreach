@@ -126,6 +126,8 @@ async function liveApp(people: number, env: Record<string, string> = {}) {
     UNIPILE_DSN: unipile.baseUrl,
     UNIPILE_API_KEY: 'unipile-test-key',
     ANTHROPIC_API_KEY: 'anthropic-test-key',
+    // Modellvergleich aus: sonst zählten zufällige Zusatzanfragen mit.
+    AI_SHADOW_PERCENT: '0',
     META_ACCESS_TOKEN: 'meta-test-key',
     DATA_DIR: tempDataDir(),
     ...env,

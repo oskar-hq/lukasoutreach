@@ -1,3 +1,4 @@
+import { openFeedback } from '../feedback/feedbackBus';
 import { AnimatePresence, motion } from 'motion/react';
 import { Bell, ChevronRight } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -129,6 +130,11 @@ export function NotificationBell() {
 
   const follow = (item: AppNotification) => {
     if (!item.target || !reachable(item)) return;
+    if (item.target.view === 'feedback') {
+      setOpen(false);
+      openFeedback();
+      return;
+    }
     if (item.target.view === 'settings') openSettingsTab((item.target.section as SettingsSection | undefined) ?? 'overview');
     setOpen(false);
     dispatch({ type: 'SET_VIEW', view: item.target.view });

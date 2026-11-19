@@ -23,6 +23,7 @@ export interface StoredSchedule extends AutoSearchUpdate {
   secondTime: string | null;
   dailyBudgetEur: number | null;
   kapitalanlagePercent: number;
+  randomMinutes: number;
   updatedAt: number;
   updatedBy: string | null;
 }
@@ -39,6 +40,7 @@ interface ScheduleRow {
   max_rounds: number | null;
   daily_budget_eur: number | null;
   kapitalanlage_percent: number | null;
+  random_minutes: number | null;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -47,6 +49,21 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export interface PendingSlot {
   startedAt: number;
   day: string;
+}
+
+/**
+ * Eingereihter Folgelauf fürs Tagesziel (Migration 54). Steht in der Datenbank, damit ein Neustart in der Pause
+ * zwischen zwei Läufen (Update!) die Suche des Tages nicht still beendet.
+ */
+export interface StoredFollowUp {
+  /** Tag des Termins („YYYY-MM-DD“) – nur an diesem Tag wird er nach einem Neustart fortgesetzt. */
+  day: string;
+  /** Frühester Start (ms). */
+  notBefore: number;
+  /** Folgelauf nach „Jetzt einmal ausführen“. */
+  manual: boolean;
+  /** Nur `manual`: Stand des Tages beim Klick – Leads und Läufe zählen ab da. */
+  chain?: { created: number; rounds: number } | null;
 }
 
 export class AutoSearchStore {
@@ -65,6 +82,7 @@ export class AutoSearchStore {
       maxRounds: row.max_rounds ?? AUTO_SEARCH_DEFAULT_MAX_ROUNDS,
       dailyBudgetEur: row.daily_budget_eur ?? null,
       kapitalanlagePercent: row.kapitalanlage_percent ?? AUTO_SEARCH_KAPITALANLAGE_PERCENT_DEFAULT,
+      randomMinutes: row.random_minutes ?? 0,
       updatedAt: row.updated_at,
       updatedBy: row.updated_by,
     };
@@ -78,16 +96,18 @@ export class AutoSearchStore {
     const secondTime = update.secondTime !== undefined ? update.secondTime : (current?.secondTime ?? null);
     const budget = update.dailyBudgetEur !== undefined ? update.dailyBudgetEur : (current?.dailyBudgetEur ?? null);
     const percent = update.kapitalanlagePercent ?? current?.kapitalanlagePercent ?? AUTO_SEARCH_KAPITALANLAGE_PERCENT_DEFAULT;
+    const random = update.randomMinutes ?? current?.randomMinutes ?? 0;
     this.db
       .prepare(
-        `INSERT INTO auto_search_schedules (founder, enabled, days, time, profile, updated_at, updated_by, daily_target, max_rounds, second_time, daily_budget_eur, kapitalanlage_percent)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO auto_search_schedules (founder, enabled, days, time, profile, updated_at, updated_by, daily_target, max_rounds, second_time, daily_budget_eur, kapitalanlage_percent, random_minutes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (founder) DO UPDATE SET enabled = excluded.enabled, days = excluded.days, time = excluded.time,
            profile = excluded.profile, updated_at = excluded.updated_at, updated_by = excluded.updated_by,
            daily_target = excluded.daily_target, max_rounds = excluded.max_rounds, second_time = excluded.second_time,
-           daily_budget_eur = excluded.daily_budget_eur, kapitalanlage_percent = excluded.kapitalanlage_percent`,
+           daily_budget_eur = excluded.daily_budget_eur, kapitalanlage_percent = excluded.kapitalanlage_percent,
+           random_minutes = excluded.random_minutes`,
       )
-      .run(founder, update.enabled ? 1 : 0, JSON.stringify(update.days), update.time, JSON.stringify(update.profile), now, by, dailyTarget, maxRounds, secondTime, budget, percent);
+      .run(founder, update.enabled ? 1 : 0, JSON.stringify(update.days), update.time, JSON.stringify(update.profile), now, by, dailyTarget, maxRounds, secondTime, budget, percent, random);
   }
 
   /** Stand des Tagesziels – nur für `day`, sonst null (neuer Tag beginnt bei 0). */
@@ -124,6 +144,27 @@ export class AutoSearchStore {
          ON CONFLICT (founder) DO UPDATE SET pending = excluded.pending`,
       )
       .run(founder, pending ? JSON.stringify(pending) : null);
+  }
+
+  /** Eingereihter Folgelauf fürs Tagesziel (null = keiner). Übersteht einen Neustart. */
+  followUp(founder: AuthFounderId): StoredFollowUp | null {
+    const row = this.db.prepare('SELECT follow_up FROM auto_search_state WHERE founder = ?').get(founder) as { follow_up: string | null } | undefined;
+    if (!row?.follow_up) return null;
+    try {
+      const stored = JSON.parse(row.follow_up) as StoredFollowUp;
+      return typeof stored?.day === 'string' && Number.isFinite(stored.notBefore) ? stored : null;
+    } catch {
+      return null;
+    }
+  }
+
+  setFollowUp(founder: AuthFounderId, followUp: StoredFollowUp | null): void {
+    this.db
+      .prepare(
+        `INSERT INTO auto_search_state (founder, follow_up) VALUES (?, ?)
+         ON CONFLICT (founder) DO UPDATE SET follow_up = excluded.follow_up`,
+      )
+      .run(founder, followUp ? JSON.stringify(followUp) : null);
   }
 
   /** Profilabrufe an diesem Tag (alle Läufe, beide Gründer). */

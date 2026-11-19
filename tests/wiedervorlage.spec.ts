@@ -51,7 +51,11 @@ test('Startseite: nach allen Follow-ups „In 2 Wochen wieder“ – pausiert, v
   await expect(item).toHaveCount(0);
   const plan = (await leadById(page, lead.id)).followUpPlan;
   expect(plan?.column).toBeNull();
-  expect(Math.round(((plan?.at ?? 0) - Date.now()) / DAY)).toBe(14);
+  // In 14 Tagen um 8 Uhr (wie `resumeAt` in HomeLists) – nicht „14 × 24 h ab jetzt“: abends ergab das gerundet 13.
+  const expected = new Date();
+  expected.setDate(expected.getDate() + 14);
+  expected.setHours(8, 0, 0, 0);
+  expect(plan?.at).toBe(expected.getTime());
   expect(errors).toEqual([]);
 });
 

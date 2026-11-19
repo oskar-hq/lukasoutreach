@@ -1,6 +1,7 @@
+import { trackJob } from '../telemetry/store.js';
 import type { FastifyBaseLogger } from 'fastify';
 import { WARMUP_RAMP, type LinkedInWarmupAccount, type LinkedInWarmupResponse } from '../../../shared/linkedin.js';
-import { UnipileClient, UnipileHttpError } from '../adapters/live/unipileClient.js';
+import { UnipileClient, UnipileHttpError, isUnipileSessionDown } from '../adapters/live/unipileClient.js';
 import { usedAccountIds, type Config } from '../config.js';
 import type { Database } from '../db/database.js';
 import { randomBetween, sleep } from '../lib/sleep.js';
@@ -33,6 +34,15 @@ const MIN_GAP_MS = 4 * MINUTE_MS;
 const ATTEMPTS_PER_TICK = 3;
 /** Wie oft die Automatik nachsieht, ob ein Account dran ist. */
 const TICK_MS = MINUTE_MS;
+/** Keine Unipile-Sitzung für den Account: so lange pausieren, dann wieder versuchen. */
+const SESSION_PAUSE_MS = 60 * MINUTE_MS;
+/**
+ * Unipile findet über den Account in einer Runde gar keine Person (jede Anfrage 404): Dann liegt es am Account
+ * (z. B. eine ID in der Aufwärm-Liste, die es bei Unipile nicht mehr gibt), nicht an den Personen – so lange pausieren.
+ */
+const NOT_FOUND_PAUSE_MS = 6 * 60 * MINUTE_MS;
+export const WARMUP_NOT_FOUND_REASON =
+  'Unipile findet über diesen Account keine der angefragten Personen – vermutlich ist der Account bei Unipile nicht mehr verbunden. Unter Einstellungen → LinkedIn → Accounts prüfen.';
 
 interface Target {
   key: string;
@@ -62,8 +72,15 @@ export class WarmupService {
   /** Nächste geplante Anfrage je Account (nur im Speicher – nach einem Neustart neu ausgelost). */
   private readonly nextAt = new Map<string, number>();
   private client: { key: string; client: UnipileClient } | null = null;
+  /** Woran die letzte Runde gescheitert ist (Job-Messung) – null = nichts. */
+  private failure: string | null = null;
 
   constructor(private readonly deps: WarmupDeps) {}
+
+  /** Fehler der letzten Runde (Account pausiert, Unipile nicht erreichbar) – für die Job-Messung. */
+  get lastFailure(): string | null {
+    return this.failure;
+  }
 
   private get config() {
     return this.deps.config;
@@ -110,6 +127,8 @@ export class WarmupService {
   limitToday(accountId: string, now: number): number {
     const started = this.startedAt(accountId);
     const week = started === null ? 0 : Math.floor((now - started) / WEEK_MS);
+    // Deaktivierter Account (03.11.): keine Aufwärm-Anfragen und keine Profilabrufe mehr.
+    if (this.deps.prefs?.isDisabled(accountId)) return 0;
     const own = this.deps.prefs?.get(accountId).invitesPerDay ?? Infinity;
     return Math.min(this.config.linkedin.warmupPerDay, WARMUP_RAMP[week] ?? Infinity, own);
   }
@@ -155,14 +174,19 @@ export class WarmupService {
    * 27.10. (Kundengespräch: „beim Aufwärmen beide Zielgruppen mischen“) je zur Hälfte Finanzdienstleister und die
    * übrigen (Kapitalanlage-Vertriebe …) – fehlt eine Seite, die andere.
    */
-  private nextTarget(): Target | null {
+  private nextTarget(tried: readonly Target[] = []): Target | null {
+    // In dieser Runde schon versuchte Personen nicht noch einmal ziehen (sie sind evtl. noch nicht gemerkt).
+    const triedIds = tried.flatMap((target) => (target.providerId ? [target.providerId] : []));
+    const triedKeys = tried.map((target) => target.key);
+    const marks = (values: readonly string[]) => values.map(() => '?').join(', ');
     const pickLead = (finance: boolean) =>
       this.deps.db
         .prepare(
           `SELECT provider_id, public_identifier FROM leads WHERE ${LEAD_FREE}
-           AND (json_extract(assessment, '$.category') IS 'finanzdienstleister') = ? ORDER BY random() LIMIT 1`,
+           AND (json_extract(assessment, '$.category') IS 'finanzdienstleister') = ?
+           ${triedIds.length ? `AND provider_id NOT IN (${marks(triedIds)})` : ''} ORDER BY random() LIMIT 1`,
         )
-        .get(finance ? 1 : 0) as { provider_id: string; public_identifier: string | null } | undefined;
+        .get(finance ? 1 : 0, ...triedIds) as { provider_id: string; public_identifier: string | null } | undefined;
     const lead = (): Target | null => {
       const finance = this.random() < 0.5;
       const row = pickLead(finance) ?? pickLead(!finance);
@@ -170,7 +194,9 @@ export class WarmupService {
       return { key: leadKey(row.provider_id, row.public_identifier), source: 'lead', providerId: row.provider_id, identifier: row.provider_id };
     };
     const tracked = (): Target | null => {
-      const row = this.deps.db.prepare(`SELECT key FROM tracking_profiles WHERE ${TRACKING_FREE} ORDER BY random() LIMIT 1`).get() as { key: string } | undefined;
+      const row = this.deps.db
+        .prepare(`SELECT key FROM tracking_profiles WHERE ${TRACKING_FREE} ${triedKeys.length ? `AND key NOT IN (${marks(triedKeys)})` : ''} ORDER BY random() LIMIT 1`)
+        .get(...triedKeys) as { key: string } | undefined;
       if (!row) return null;
       return { key: row.key, source: 'tracking', providerId: null, identifier: row.key.slice(3) };
     };
@@ -201,6 +227,7 @@ export class WarmupService {
   }
 
   private async runTick(now: number): Promise<void> {
+    this.failure = null;
     const unipile = this.unipile;
     if (!unipile || !withinWorkHours(this.config.linkedin, now)) return;
     for (const accountId of this.accounts()) {
@@ -221,9 +248,26 @@ export class WarmupService {
 
   /** Eine Anfrage über diesen Account – true, wenn gesendet. */
   private async sendOne(unipile: UnipileClient, accountId: string, now: number): Promise<boolean> {
+    const tried: Target[] = [];
+    // „Nicht gefunden“ (404) kann an der Person liegen – oder am Account (10.11.: eine Account-ID in der Aufwärm-Liste,
+    // die es bei Unipile nicht mehr gibt, hätte so jede Runde drei Personen für immer als „übersprungen“ verbraucht).
+    // Darum erst merken, wenn derselbe Account in dieser Runde bei jemand anderem funktioniert hat.
+    const notFound: Array<{ target: Target; detail: string }> = [];
+    let accountWorks = false;
+    const pauseAccount = (until: number, reason: string, log: string) => {
+      this.deps.db
+        .prepare('INSERT INTO warmup_pauses (account_id, until, reason) VALUES (?, ?, ?) ON CONFLICT(account_id) DO UPDATE SET until = excluded.until, reason = excluded.reason')
+        .run(accountId, until, reason);
+      this.failure = `Account ${accountId} pausiert: ${reason}`;
+      this.deps.log.warn({ accountId, error: log }, 'Aufwärmen: Account pausiert');
+    };
+    const settle = (): void => {
+      for (const entry of notFound.splice(0)) this.record(entry.target, accountId, 'skipped', entry.target.providerId, entry.detail, now);
+    };
     for (let attempt = 0; attempt < ATTEMPTS_PER_TICK; attempt++) {
-      const target = this.nextTarget();
-      if (!target) return false;
+      const target = this.nextTarget(tried);
+      if (!target) break;
+      tried.push(target);
       try {
         let providerId = target.providerId;
         if (!providerId) {
@@ -231,9 +275,10 @@ export class WarmupService {
           const profileLimit = Math.min(UNIPILE_LIMITS.profilesPerDay, this.deps.prefs?.get(accountId).profilesPerDay ?? UNIPILE_LIMITS.profilesPerDay);
           if (this.deps.usage.used(accountId, 'profile', now) >= profileLimit) return false;
           const profile = await unipile.getProfile({ accountId, identifier: target.identifier }, AbortSignal.timeout(30_000));
-          this.deps.usage.add(accountId, 'profile', 1, now);
+          this.deps.usage.add(accountId, 'profile', 1, now, 'warmup');
           const connected = profile.network_distance === 'FIRST_DEGREE' || profile.network_distance === 'DISTANCE_1';
           const pending = profile.invitation?.type === 'SENT' && profile.invitation.status === 'PENDING';
+          accountWorks = true;
           if (!profile.provider_id || connected || pending) {
             this.record(target, accountId, 'skipped', profile.provider_id ?? null, connected ? 'schon vernetzt' : pending ? 'schon angefragt' : 'keine Kennung', now);
             continue;
@@ -243,29 +288,43 @@ export class WarmupService {
         }
         await unipile.sendInvitation({ accountId, providerId }, AbortSignal.timeout(30_000));
         this.record(target, accountId, 'sent', providerId, null, now);
+        // Der Account funktioniert – „nicht gefunden“ davor lag also an den Personen.
+        settle();
         this.deps.log.info({ accountId, source: target.source }, 'Aufwärmen: Vernetzungsanfrage gesendet');
         return true;
       } catch (error) {
         const classified = classify(error);
-        if (classified.pauseMs) {
-          // Limit, Zugang oder Serverfehler: nicht die Person, sondern der Account – pausieren, Person bleibt frei.
-          const until = now + classified.pauseMs;
-          this.deps.db
-            .prepare('INSERT INTO warmup_pauses (account_id, until, reason) VALUES (?, ?, ?) ON CONFLICT(account_id) DO UPDATE SET until = excluded.until, reason = excluded.reason')
-            .run(accountId, until, classified.reason);
-          this.deps.log.warn({ accountId, error: classified.log }, 'Aufwärmen: Account pausiert');
+        if (classified.pauseMs || isUnipileSessionDown(error)) {
+          // Limit, Zugang, Serverfehler oder keine Unipile-Sitzung: nicht die Person, sondern der Account – pausieren,
+          // Person bleibt frei. (Ohne Sitzung wurde bis 10.11. die Person als „übersprungen“ verbraucht.)
+          if (accountWorks) settle();
+          pauseAccount(now + (classified.pauseMs ?? SESSION_PAUSE_MS), classified.reason, classified.log);
           return false;
         }
+        if (error instanceof UnipileHttpError && error.status === 404) {
+          notFound.push({ target, detail: classified.log });
+          continue;
+        }
         if (error instanceof UnipileHttpError) {
-          // Diese Person geht nicht (schon vernetzt/angefragt, nicht gefunden …) – merken und die nächste nehmen.
+          // Diese Person geht nicht (schon vernetzt/angefragt …) – merken und die nächste nehmen. LinkedIn hat über
+          // den Account geantwortet, er funktioniert also.
+          accountWorks = true;
           this.record(target, accountId, 'skipped', target.providerId, classified.log, now);
           continue;
         }
         // Netzwerk/Zeitüberschreitung: nächste Runde noch einmal, Person bleibt frei.
+        if (accountWorks) settle();
+        this.failure = 'Unipile nicht erreichbar';
         this.deps.log.warn({ accountId, error: classified.log }, 'Aufwärmen: Unipile nicht erreichbar');
         return false;
       }
     }
+    // Jede Anfrage dieser Runde „nicht gefunden“ und nichts hat funktioniert → Account prüfen, Personen bleiben frei.
+    if (notFound.length >= ATTEMPTS_PER_TICK && !accountWorks) {
+      pauseAccount(now + NOT_FOUND_PAUSE_MS, WARMUP_NOT_FOUND_REASON, notFound[0].detail);
+      return false;
+    }
+    settle();
     return false;
   }
 
@@ -277,7 +336,7 @@ export class WarmupService {
 
   start(): void {
     if (this.timer) return;
-    this.timer = setInterval(() => void this.tick().catch((error) => this.deps.log.warn({ error: String(error) }, 'Aufwärmen fehlgeschlagen')), TICK_MS);
+    this.timer = setInterval(() => void trackJob('aufwaermen', () => this.tick(), () => this.failure).catch((error) => this.deps.log.warn({ error: String(error) }, 'Aufwärmen fehlgeschlagen')), TICK_MS);
     this.timer.unref?.();
   }
 

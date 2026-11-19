@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { trackHotkey } from './telemetry';
 
 export type HotkeyMap = Partial<Record<string, () => void>>;
 
@@ -46,6 +47,7 @@ export function useHotkeys(map: HotkeyMap, enabled = true) {
       const handler = mapRef.current[event.key.toLowerCase()];
       if (handler) {
         event.preventDefault();
+        trackHotkey(event.key.toLowerCase());
         handler();
       }
     };

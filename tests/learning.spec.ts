@@ -82,3 +82,27 @@ test('Automatisch: Termin eintragen macht den Lead zu „passt“ – überschre
   await expect(box.getByTestId('lead-feedback-reasons')).toBeVisible();
   expect(errors).toEqual([]);
 });
+
+test('Dashboard: Lernen erklärt sich, zeigt Profilabrufe je Lead – Bericht für Claude als Markdown (09.11.)', async ({ page }) => {
+  const errors = trackErrors(page);
+  await page.goto('/?ping=off');
+  await signIn(page, 'nick');
+  await page.getByTestId('nav-dashboard').click();
+  await page.getByTestId('dashboard-more').click();
+  const section = page.getByTestId('learning-section');
+  await expect(section.getByTestId('learning-explainer')).toContainText('als Beispiele mit');
+  await expect(section.getByTestId('learning-efficiency')).toContainText('Profilabrufe je qualifiziertem Lead');
+  await expect(section.getByTestId('learning-per-lead')).toBeVisible();
+
+  const [download] = await Promise.all([page.waitForEvent('download'), section.getByTestId('learning-report-download').click()]);
+  expect(download.suggestedFilename()).toMatch(/^optimierungs-bericht-\d{4}-\d{2}-\d{2}\.md$/);
+  const path = await download.path();
+  const { readFile } = await import('node:fs/promises');
+  const text = await readFile(path!, 'utf8');
+  expect(text).toMatch(/^# Optimierungs-Bericht/);
+  for (const heading of ['KI-Kosten je Zweck und Modell', 'Suchanfragen', 'LinkedIn-Abrufe', 'Entscheidungen je Treffer', 'Modellvergleich', 'Rückmeldungen']) {
+    expect(text).toContain(heading);
+  }
+  await expect(section.getByTestId('learning-report-error')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});

@@ -17,7 +17,7 @@ import type { NotificationListResponse } from '../../shared/notifications.js';
 import { createLiveAdapter } from '../src/adapters/live/liveAdapter.js';
 import { MockAdapter } from '../src/adapters/mock/mockAdapter.js';
 import { buildApp } from '../src/app.js';
-import { AUTO_SEARCH_MESSAGES, checkedIds, mostlyUnrated } from '../src/autoSearch/planner.js';
+import { AUTO_SEARCH_MESSAGES, checkedIds, followUpPauseMinutes, mostlyUnrated } from '../src/autoSearch/planner.js';
 import { dueSlot, nextRunAt } from '../src/autoSearch/time.js';
 import { ROLE_MESSAGES } from '../src/auth/roles.js';
 import { loadConfig } from '../src/config.js';
@@ -176,6 +176,7 @@ test('ohne gespeicherten Plan: Standardwerte (werktags 07:00, aus)', async () =>
         nextFocus: 'kapitalanlage_vertrieb',
         focusCounts: { kapitalanlage_vertrieb: 0, finanzdienstleister: 0, bautraeger_projektentwickler: 0 },
         kapitalanlagePercent: 50,
+        randomMinutes: 0,
         updatedAt: null,
         updatedBy: null,
         dailyTarget: null,
@@ -1249,6 +1250,87 @@ test('Neustart, während ein fälliger Termin wartet: beim Start skipped mit Sat
   await second.app.close();
 });
 
+test('Neustart in der Pause zwischen zwei Läufen (10.11.): der Folgelauf fürs Tagesziel läuft danach weiter', async () => {
+  const dataDir = tempDataDir();
+  const first = autoApp({ dataDir });
+  const nick = await login(first.app, 'nick');
+  await save(first.app, nick, 'nick', { ...plan(), dailyTarget: 100, maxRounds: 3 });
+  first.clock.now = MONDAY_0700 + 10_000;
+  await first.app.autoSearch.tick();
+  await first.app.autoSearch.idle();
+  const before = (await schedules(first.app, nick)).nick;
+  assert.equal(before.today?.rounds, 1);
+  const planned = MONDAY_0700 + 10_000 + AUTO_SEARCH_FOLLOW_UP_PAUSE_MINUTES * MINUTE;
+  assert.equal(before.followUpAt, planned);
+  assert.deepEqual(first.app.autoSearch.store.followUp('nick'), { day: '2026-10-05', notBefore: planned, manual: false, chain: null });
+  // Update: der Server startet in der Pause neu (wie am 10.11. um 06:48 – danach lief an dem Tag nichts mehr).
+  await first.app.close();
+
+  const second = autoApp({ dataDir, clock: { now: MONDAY_0700 + 2 * MINUTE } });
+  const again = await login(second.app, 'nick');
+  // Wieder eingereiht, zur geplanten Zeit – nicht sofort.
+  assert.equal((await schedules(second.app, again)).nick.followUpAt, planned);
+  await second.app.autoSearch.tick();
+  await second.app.autoSearch.idle();
+  assert.equal((await schedules(second.app, again)).nick.today?.rounds, 1, 'Pause noch nicht vorbei');
+  await runFollowUps(second.app, second.clock);
+  const after = (await schedules(second.app, again)).nick;
+  assert.equal(after.today?.rounds, 3, 'bis zur Höchstzahl der Läufe weitergesucht');
+  assert.match(after.today?.stopReason ?? '', /Gestoppt nach 3 Läufen/);
+  assert.equal(after.followUpAt, null);
+  assert.equal(second.app.autoSearch.store.followUp('nick'), null, 'kein Folgelauf mehr gemerkt');
+  await second.app.close();
+});
+
+test('Neustart erst am nächsten Tag: der gemerkte Folgelauf verfällt; lange aus: er startet frühestens eine Minute nach dem Start', async () => {
+  const dataDir = tempDataDir();
+  const first = autoApp({ dataDir });
+  const nick = await login(first.app, 'nick');
+  await save(first.app, nick, 'nick', { ...plan(), dailyTarget: 100, maxRounds: 3 });
+  first.clock.now = MONDAY_0700 + 10_000;
+  await first.app.autoSearch.tick();
+  await first.app.autoSearch.idle();
+  assert.ok(first.app.autoSearch.store.followUp('nick'));
+  await first.app.close();
+
+  // Zwei Stunden aus: nicht in derselben Sekunde losrennen, sondern eine Minute nach dem Start.
+  const later = autoApp({ dataDir, clock: { now: MONDAY_0700 + 120 * MINUTE } });
+  const cookie = await login(later.app, 'nick');
+  assert.equal((await schedules(later.app, cookie)).nick.followUpAt, MONDAY_0700 + 121 * MINUTE);
+  await later.app.close();
+
+  // Am Dienstag: der Tag des Termins ist vorbei – nichts wird fortgesetzt, der Merker ist weg.
+  const tuesday = autoApp({ dataDir, clock: { now: MONDAY_0700 + 24 * 60 * MINUTE } });
+  const next = await login(tuesday.app, 'nick');
+  assert.equal((await schedules(tuesday.app, next)).nick.followUpAt, null);
+  assert.equal(tuesday.app.autoSearch.store.followUp('nick'), null);
+  await runFollowUps(tuesday.app, tuesday.clock, 3);
+  assert.equal(tuesday.app.autoSearch.store.lastRun('nick')?.startedAt, MONDAY_0700, 'kein neuer Lauf');
+  await tuesday.app.close();
+});
+
+test('Neustart nach „Jetzt einmal ausführen“: die Kette zählt weiter ab dem Klick, auch bei ausgeschaltetem Zeitplan', async () => {
+  const dataDir = tempDataDir();
+  const first = autoApp({ dataDir });
+  const nick = await login(first.app, 'nick');
+  await save(first.app, nick, 'nick', { ...plan({ enabled: false }), dailyTarget: 100, maxRounds: 2 });
+  first.clock.now = MONDAY_0700 + 30 * MINUTE;
+  const started = await req(first.app, nick, 'POST', '/api/auto-search/nick/run');
+  assert.equal(started.statusCode, 202, started.body);
+  await first.app.autoSearch.idle();
+  assert.deepEqual(first.app.autoSearch.store.followUp('nick')?.chain, { created: 0, rounds: 0 });
+  await first.app.close();
+
+  const second = autoApp({ dataDir, clock: { now: MONDAY_0700 + 31 * MINUTE } });
+  const again = await login(second.app, 'nick');
+  assert.equal((await schedules(second.app, again)).nick.followUpManual, true);
+  await runFollowUps(second.app, second.clock);
+  const after = (await schedules(second.app, again)).nick;
+  assert.equal(after.today?.rounds, 2, 'zweiter Lauf der Kette nach dem Neustart, dann Höchstzahl');
+  assert.equal(after.lastRun?.manual, true);
+  await second.app.close();
+});
+
 test('Lauf über Mitternacht: Läufe und Leads zählen für den Tag des Termins, kein Folgelauf am neuen Tag', async () => {
   const adapter = new GatedAdapter();
   const monday2358 = Date.UTC(2026, 9, 5, 21, 58); // Mo 23:58 Berlin
@@ -1355,5 +1437,82 @@ test('KI-Tagesbudget: Prüfung der Eingabe, null schaltet es aus, fehlt es, blei
   assert.equal((await save(app, nick, 'nick', { ...plan(), dailyBudgetEur: 10.1 })).dailyBudgetEur, 10.1);
   assert.equal((await save(app, nick, 'nick', plan())).dailyBudgetEur, 10.1, 'fehlt → bleibt');
   assert.equal((await save(app, nick, 'nick', { ...plan(), dailyBudgetEur: null })).dailyBudgetEur, null);
+  await app.close();
+});
+
+/** Simulation, deren Suche n-mal mit „Account getrennt“ scheitert (alle Such-Accounts aus), danach wieder geht. */
+class FlakyAccountsAdapter extends MockAdapter {
+  failures: number;
+  constructor(failures: number) {
+    super(0);
+    this.failures = failures;
+  }
+  override async search(...args: Parameters<MockAdapter['search']>) {
+    if (this.failures > 0) {
+      this.failures--;
+      throw new AdapterError('auth', 'Unipile-Zugang abgelehnt', 'The account appears to be disconnected from the provider service.', true);
+    }
+    return super.search(...args);
+  }
+}
+
+test('Lauf scheitert an ausgefallenen Accounts (05.11.): nach 30 Minuten neuer Versuch statt Schluss für heute', async () => {
+  const { app, clock } = autoApp({ adapter: new FlakyAccountsAdapter(1) });
+  const nick = await login(app, 'nick');
+  await save(app, nick, 'nick', { ...plan(), dailyTarget: 5, maxRounds: 4 });
+  clock.now = MONDAY_0700 + 1000;
+  await app.autoSearch.tick();
+  await app.autoSearch.idle();
+  let schedule = (await schedules(app, nick)).nick;
+  assert.equal(schedule.lastRun?.status, 'failed');
+  assert.equal(schedule.today?.stopReason ?? null, null, 'kein Stopp');
+  assert.ok(schedule.followUpAt && schedule.followUpAt >= clock.now + 29 * MINUTE, 'neuer Versuch eingereiht');
+  clock.now += 31 * MINUTE;
+  await app.autoSearch.tick();
+  await app.autoSearch.idle();
+  schedule = (await schedules(app, nick)).nick;
+  assert.equal(schedule.lastRun?.status, 'done');
+  assert.ok((schedule.today?.created ?? 0) > 0);
+  await app.close();
+});
+
+test('Lauf scheitert immer wieder: höchstens zwei neue Versuche am Tag, dann Stopp mit Grund', async () => {
+  const { app, clock } = autoApp({ adapter: new FlakyAccountsAdapter(10) });
+  const nick = await login(app, 'nick');
+  await save(app, nick, 'nick', { ...plan(), dailyTarget: 5, maxRounds: 4 });
+  clock.now = MONDAY_0700 + 1000;
+  await app.autoSearch.tick();
+  await app.autoSearch.idle();
+  for (let i = 0; i < 3; i++) {
+    clock.now += 31 * MINUTE;
+    await app.autoSearch.tick();
+    await app.autoSearch.idle();
+  }
+  const schedule = (await schedules(app, nick)).nick;
+  assert.equal(schedule.today?.rounds, 3, 'erster Lauf + zwei Versuche');
+  assert.match(schedule.today?.stopReason ?? '', /Gestoppt: Der letzte Lauf lief nicht sauber durch/);
+  await app.close();
+});
+
+test('Zufällige Pausen zwischen den Läufen (06.11.): mit randomMinutes zwischen 5 und n Minuten, ohne fest 5', async () => {
+  assert.equal(followUpPauseMinutes(0, () => 0.99), AUTO_SEARCH_FOLLOW_UP_PAUSE_MINUTES);
+  assert.equal(followUpPauseMinutes(90, () => 0), 5);
+  assert.equal(followUpPauseMinutes(90, () => 0.9999), 90);
+  const seen = new Set(Array.from({ length: 200 }, () => followUpPauseMinutes(90)));
+  assert.ok([...seen].every((value) => value >= 5 && value <= 90));
+  assert.ok(seen.size > 20, 'verschiedene Pausen');
+
+  const { app, clock } = autoApp();
+  const nick = await login(app, 'nick');
+  await save(app, nick, 'nick', { ...plan(), dailyTarget: 100, maxRounds: 4, randomMinutes: 90 });
+  // Termin 07:00 + Zufall: bis zum echten Start vorspulen.
+  const next = (await schedules(app, nick)).nick.nextRunAt!;
+  clock.now = next + 1000;
+  await app.autoSearch.tick();
+  await app.autoSearch.idle();
+  const schedule = (await schedules(app, nick)).nick;
+  assert.equal(schedule.lastRun?.status, 'done');
+  const wait = (schedule.followUpAt ?? 0) - clock.now;
+  assert.ok(wait >= 5 * MINUTE - 1000 && wait <= 90 * MINUTE, `Pause ${wait / MINUTE} min`);
   await app.close();
 });

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react';
-import { BarChart3, Layers, LogOut, MessagesSquare, Settings, UserCog, UserSearch, Users } from 'lucide-react';
+import { BarChart3, Layers, LogOut, MessageSquarePlus, MessagesSquare, Settings, UserCog, UserSearch, Users } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { FOUNDERS } from '../../data/founders';
 import { useWaitingRegistrations } from '../accounts/useWaitingRegistrations';
@@ -13,6 +13,8 @@ import type { FounderId, View } from '../../state/types';
 import { useLeadSearch } from '../leadSearch/LeadSearchProvider';
 import { LogoMark } from './Logo';
 import { NotificationBell } from './NotificationBell';
+import { FeedbackButton } from '../feedback/FeedbackButton';
+import { openFeedback } from '../feedback/feedbackBus';
 import { SPRING_MENU } from '../../lib/motion';
 
 type NavItem = { view: View; label: string; icon: ReactNode; badge?: number; live?: boolean; warn?: boolean };
@@ -107,6 +109,7 @@ function DesktopNav() {
         </nav>
 
         <div className="flex items-center gap-2">
+          <FeedbackButton />
           <NotificationBell />
           <UserMenu founderId={founder.id} />
         </div>
@@ -169,6 +172,7 @@ function PhoneNav() {
             {title}
           </p>
           <div className="flex items-center gap-1 justify-self-end">
+            <FeedbackButton />
             <NotificationBell />
             <UserMenu founderId={founder.id} />
           </div>
@@ -422,6 +426,18 @@ function UserMenu({ founderId }: { founderId: FounderId }) {
                 )}
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                openFeedback();
+              }}
+              data-testid="menu-feedback"
+              className="flex w-full items-center gap-2.5 px-4 py-3 text-left text-[13.5px] text-ink-2 transition-colors hover:bg-white/[0.05] hover:text-ink"
+            >
+              <MessageSquarePlus className="h-4 w-4" />
+              Feedback oder Fehler melden
+            </button>
             <button
               type="button"
               onClick={() => void signOut()}

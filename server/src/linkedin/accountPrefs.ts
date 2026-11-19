@@ -1,4 +1,4 @@
-import type { LinkedInAccountLimits } from '../../../shared/linkedin.js';
+import type { LinkedInAccountLimits, LinkedInInviteMode } from '../../../shared/linkedin.js';
 import { AUTH_FOUNDER_IDS, type AuthFounderId } from '../../../shared/auth.js';
 import type { Config } from '../config.js';
 import type { Database } from '../db/database.js';
@@ -13,9 +13,18 @@ import { UNIPILE_LIMITS } from './accountUsage.js';
 export interface AccountPref extends LinkedInAccountLimits {
   /** Platz in der Reihenfolge (0 = zuerst) – null: hinter allen mit Platz, in der Reihenfolge von Unipile. */
   position: number | null;
+  /** Deaktiviert (03.11.): kein Traffic mehr über den Account. */
+  disabled: boolean;
+  /** Wie Anfragen rausgehen (05.11.) – null = Standard `spread`. */
+  inviteMode: LinkedInInviteMode | null;
+  /** Ende von `manual` (ms) – null = bis auf Widerruf. */
+  manualUntil: number | null;
 }
 
-const EMPTY: AccountPref = { position: null, profilesPerDay: null, searchResultsPerDay: null, invitesPerDay: null };
+const EMPTY: AccountPref = { position: null, profilesPerDay: null, searchResultsPerDay: null, invitesPerDay: null, disabled: false, inviteMode: null, manualUntil: null };
+
+/** Standard für Gründer-Accounts (Teammeeting 05.11.: Anfragen nicht mehr im Block, sondern über den Tag verteilt). */
+export const DEFAULT_INVITE_MODE: LinkedInInviteMode = 'spread';
 
 /** Obergrenzen für eigene Werte. Suchtreffer: die höhere der beiden Such-Arten (je nach Suche gilt die passende). */
 export const ACCOUNT_LIMIT_MAX: Record<keyof LinkedInAccountLimits, number> = {
@@ -29,10 +38,63 @@ export class AccountPrefsStore {
 
   get(accountId: string): AccountPref {
     const row = this.db
-      .prepare('SELECT position, profiles_per_day, search_results_per_day, invites_per_day FROM linkedin_account_prefs WHERE account_id = ?')
-      .get(accountId) as { position: number | null; profiles_per_day: number | null; search_results_per_day: number | null; invites_per_day: number | null } | undefined;
+      .prepare('SELECT position, profiles_per_day, search_results_per_day, invites_per_day, disabled, invite_mode, manual_until FROM linkedin_account_prefs WHERE account_id = ?')
+      .get(accountId) as
+      | {
+          position: number | null;
+          profiles_per_day: number | null;
+          search_results_per_day: number | null;
+          invites_per_day: number | null;
+          disabled: number | null;
+          invite_mode: string | null;
+          manual_until: number | null;
+        }
+      | undefined;
     if (!row) return { ...EMPTY };
-    return { position: row.position, profilesPerDay: row.profiles_per_day, searchResultsPerDay: row.search_results_per_day, invitesPerDay: row.invites_per_day };
+    const mode = row.invite_mode === 'spread' || row.invite_mode === 'instant' || row.invite_mode === 'manual' ? row.invite_mode : null;
+    return {
+      position: row.position,
+      profilesPerDay: row.profiles_per_day,
+      searchResultsPerDay: row.search_results_per_day,
+      invitesPerDay: row.invites_per_day,
+      disabled: row.disabled === 1,
+      inviteMode: mode,
+      manualUntil: row.manual_until ?? null,
+    };
+  }
+
+  /**
+   * Wie Anfragen über den Account rausgehen – jetzt (05.11.). `manual` mit abgelaufenem Ende gilt als Standard.
+   * `until` nur bei `manual`.
+   */
+  inviteMode(accountId: string, now = Date.now(), fallback: LinkedInInviteMode = DEFAULT_INVITE_MODE): { mode: LinkedInInviteMode; until: number | null } {
+    const pref = this.get(accountId);
+    if (pref.inviteMode === 'manual') {
+      // Abgelaufen: zurück zum Standard – nie wieder „von Hand“ über den Standard, sonst endete die Testwoche nie.
+      if (pref.manualUntil !== null && pref.manualUntil <= now) return { mode: fallback === 'manual' ? DEFAULT_INVITE_MODE : fallback, until: null };
+      return { mode: 'manual', until: pref.manualUntil };
+    }
+    return { mode: pref.inviteMode ?? fallback, until: null };
+  }
+
+  setInviteMode(accountId: string, mode: LinkedInInviteMode, until: number | null): void {
+    this.db
+      .prepare(
+        'INSERT INTO linkedin_account_prefs (account_id, invite_mode, manual_until) VALUES (?, ?, ?) ON CONFLICT(account_id) DO UPDATE SET invite_mode = excluded.invite_mode, manual_until = excluded.manual_until',
+      )
+      .run(accountId, mode, mode === 'manual' ? until : null);
+  }
+
+  /** Ist der Account deaktiviert? Dann geht nichts mehr darüber (Suche, Profile, Firmenseiten, Aufwärmen, Senden). */
+  isDisabled(accountId: string): boolean {
+    return this.get(accountId).disabled;
+  }
+
+  /** Account mit einem Klick aus- bzw. wieder einschalten – Grenzen und Platz bleiben. */
+  setDisabled(accountId: string, disabled: boolean): void {
+    this.db
+      .prepare('INSERT INTO linkedin_account_prefs (account_id, disabled) VALUES (?, ?) ON CONFLICT(account_id) DO UPDATE SET disabled = excluded.disabled')
+      .run(accountId, disabled ? 1 : 0);
   }
 
   /** Eigene Grenzen setzen (fehlendes Feld bleibt, null = Standard). */
@@ -70,9 +132,11 @@ export class AccountPrefsStore {
     return ids.some((id) => this.get(id).position !== null);
   }
 
-  /** Eigener Wert, sonst der Standard – nie höher als die Unipile-Grenze. */
+  /** Eigener Wert, sonst der Standard – nie höher als die Unipile-Grenze. Deaktiviert: 0. */
   limit(accountId: string, kind: keyof LinkedInAccountLimits, fallback: number): number {
-    const own = this.get(accountId)[kind];
+    const pref = this.get(accountId);
+    if (pref.disabled) return 0;
+    const own = pref[kind];
     return Math.min(ACCOUNT_LIMIT_MAX[kind], own ?? fallback);
   }
 }

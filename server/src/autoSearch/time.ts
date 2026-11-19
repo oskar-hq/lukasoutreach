@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Weekday } from '../../../shared/autoSearch.js';
 import { localTime } from '../linkedin/guard.js';
 
@@ -81,4 +82,63 @@ export function nextRunAt(now: number, days: readonly Weekday[], time: string, t
     if (at !== null && at > now) return at;
   }
   return null;
+}
+
+/**
+ * Zufälliger Start (Teammeeting 05.11., `randomMinutes`): Je Tag, Termin und `seed` (Gründer) eine feste Verschiebung
+ * von 0 bis `max` Minuten – zufällig verteilt, aber stabil (nach einem Neustart und für `nextRunAt` dieselbe).
+ */
+export function randomOffsetMinutes(day: string, time: string, seed: string, max: number): number {
+  if (!max || max <= 0) return 0;
+  const hash = createHash('sha256').update(`${seed}|${day}|${time}`).digest().readUInt32BE(0);
+  return hash % (Math.floor(max) + 1);
+}
+
+/** „HH:MM“ plus Minuten, nie über 23:59 hinaus (der Lauf bleibt am selben Tag). */
+export function shiftClock(time: string, minutes: number): string {
+  const [hour, minute] = time.split(':').map(Number);
+  const total = Math.min(23 * 60 + 59, hour * 60 + minute + Math.max(0, Math.floor(minutes)));
+  return `${pad(Math.floor(total / 60))}:${pad(total % 60)}`;
+}
+
+/** Tatsächliche Uhrzeit eines Termins an einem Tag (mit zufälliger Verschiebung). */
+export function effectiveClock(day: string, time: string, seed: string, max: number): string {
+  return shiftClock(time, randomOffsetMinutes(day, time, seed, max));
+}
+
+/**
+ * Wie `dueSlotAny`, mit zufälliger Verschiebung je Tag. Die Kennung bleibt „Tag Uhrzeit“ der eingestellten Uhrzeit,
+ * damit doppeltes Auslösen ausgeschlossen bleibt (auch wenn sich `max` ändert).
+ */
+export function dueSlotRandom(now: number, days: readonly Weekday[], times: readonly string[], timeZone: string, seed: string, max: number): string | null {
+  if (!max) return dueSlotAny(now, days, times, timeZone);
+  const local = localClock(now, timeZone);
+  if (!days.includes(local.weekday as Weekday)) return null;
+  for (const time of times) {
+    if (local.time === effectiveClock(local.day, time, seed, max)) return `${local.day} ${time}`;
+  }
+  return null;
+}
+
+/** Wie `nextRunAtAny`, mit zufälliger Verschiebung je Tag. */
+export function nextRunAtRandom(now: number, days: readonly Weekday[], times: readonly string[], timeZone: string, seed: string, max: number): number | null {
+  if (!max) return nextRunAtAny(now, days, times, timeZone);
+  if (days.length === 0) return null;
+  const today = localTime(now, timeZone).day.split('-').map(Number);
+  let best: number | null = null;
+  for (const time of times) {
+    for (let offset = 0; offset <= 15; offset++) {
+      const date = new Date(Date.UTC(today[0], today[1] - 1, today[2] + offset));
+      const weekday = ((date.getUTCDay() + 6) % 7) + 1;
+      if (!days.includes(weekday as Weekday)) continue;
+      const [y, m, d] = [date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate()];
+      const clock = effectiveClock(`${y}-${pad(m)}-${pad(d)}`, time, seed, max);
+      const at = instantOf(y, m, d, clock, timeZone);
+      if (at !== null && at > now) {
+        if (best === null || at < best) best = at;
+        break;
+      }
+    }
+  }
+  return best;
 }

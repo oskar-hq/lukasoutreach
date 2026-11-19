@@ -1,4 +1,4 @@
-import type { CockpitLead } from '../../../shared/leads';
+import { MESSAGE_WITHOUT_TEXT, type CockpitLead } from '../../../shared/leads';
 import { FOUNDERS } from '../../data/founders';
 import { cn } from '../../lib/cn';
 import { leadInitials, leadName, type ThreadMessage } from '../../lib/leadView';
@@ -55,7 +55,14 @@ export function ChatThread({ lead, messages, highlightLatestReply, compact, show
                   message.pending && 'opacity-70',
                 )}
               >
-                {message.text}
+                {message.text === MESSAGE_WITHOUT_TEXT ? (
+                  // Sticker, Bild oder Anhang (09.11.) – der Inhalt ist nicht bekannt, nur dass etwas rausging.
+                  <span className="italic text-ink-2" data-testid="chat-without-text">
+                    Sticker oder Anhang (ohne Text)
+                  </span>
+                ) : (
+                  message.text
+                )}
               </div>
             </div>
           </li>

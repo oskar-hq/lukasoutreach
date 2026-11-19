@@ -186,8 +186,26 @@ export type LeadOrigin =
   | { kind: 'search'; runId: string; mode: LeadSearchMode; auto?: boolean; searchedBy?: AuthFounderId }
   | { kind: 'tracking'; sheet: string | null; setter: string | null }
   | { kind: 'demo' }
-  /** Persönlicher Kontakt, per LinkedIn-Link von Hand aufgenommen (`POST /api/leads/contact`) – ohne Suche und KI. */
-  | { kind: 'contact' };
+  /**
+   * Persönlicher Kontakt, per LinkedIn-Link von Hand aufgenommen (`POST /api/leads/contact`) – ohne Suche und KI.
+   * `via` (05.11., fehlt bei älteren Leads): von selbst aus LinkedIn übernommen – `manual_invite` = von Hand auf
+   * LinkedIn (z. B. Sales Navigator) angefragt und angenommen, `new_connection` = neuer Kontakt ohne gesehene Anfrage
+   * (nur übernommen, wenn die KI ihn als passend einstuft). Siehe `shared/linkedin.ts` → Anfragen von Hand.
+   */
+  | { kind: 'contact'; via?: ContactVia };
+
+/** Wie ein Kontakt von selbst ins Cockpit kam (`LeadOrigin` `contact`). */
+export type ContactVia = 'manual_invite' | 'new_connection';
+
+/** Geplante Vernetzungsanfrage (`CockpitLead.queuedInvite`, siehe `shared/linkedin.ts` → Anfragen über den Tag verteilen). */
+export interface QueuedInvite {
+  /** Geplanter Versand (ms). */
+  at: number;
+  /** Notiz zur Anfrage oder null. */
+  message: string | null;
+  /** Eingeplant am (ms). */
+  queuedAt: number;
+}
 
 export interface LeadPerson {
   firstName: string;
@@ -285,6 +303,11 @@ export interface CockpitLead {
    * eine Recruiting-Vorlage vor (Zielgruppe `hiring`). Fehlt/null = kein Hinweis.
    */
   hiring?: LeadHiring | null;
+  /**
+   * Vernetzungsanfrage ist eingeplant, aber noch nicht gesendet (05.11., `shared/linkedin.ts` → Anfragen über den Tag
+   * verteilen). Stufe bleibt bis zum Senden `new`; im Tagesstapel erscheint der Lead solange nicht. Fehlt/null = keine.
+   */
+  queuedInvite?: QueuedInvite | null;
 }
 
 /** Höchster Deal Value je Lead (ganze Euro). */
@@ -455,7 +478,19 @@ export interface LeadActionRequest {
    * die Meldung, wird sie nicht doppelt gebucht (siehe Dateikopf). Gilt je Lead.
    */
   clientId?: string;
+  /**
+   * Von Hand auf LinkedIn erledigt – nur eintragen, nie über das Cockpit senden (09.11.). `invite_sent`: Knopf
+   * „Manuell vernetzt“ auf der Karte „Neuer Lead“ – die Anfrage zählt in der Statistik als „von Hand“.
+   * `message_sent`: z. B. Follow-up als Sticker (Text `MESSAGE_WITHOUT_TEXT`).
+   */
+  manual?: boolean;
 }
+
+/**
+ * Nachricht ohne Text (Sticker, Bild, Anhang – 09.11.): So steht sie im Verlauf, wenn sie aus dem LinkedIn-Chat übernommen
+ * oder über „Follow-up schon gesendet (Sticker)“ eingetragen wurde. Das Frontend zeigt sie als Hinweis statt als Text.
+ */
+export const MESSAGE_WITHOUT_TEXT = 'Sticker oder Anhang (ohne Text)';
 
 export interface SnoozeRequest {
   /** Bis wann (ms); ohne Angabe Mitternacht Ortszeit (Europe/Berlin). Höchstens 30 Tage in der Zukunft. */

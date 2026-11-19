@@ -227,7 +227,8 @@ test('Karten: „Hat geantwortet“ auf der Erstnachricht, „Termin vereinbart�
   const first = currentCard(page);
   await expect(first).toHaveAttribute('data-card-type', 'first');
   const name = (await first.getByTestId('lead-name').textContent())!;
-  await page.keyboard.press('a');
+  // Per Knopf: Hat die Karte einen Entwurf, steht der Cursor im Textfeld – dort ist „A“ ein Buchstabe, kein Kürzel.
+  await first.getByTestId('log-reply').click();
   await expect(first.getByTestId('log-reply-form')).toBeVisible();
   await first.getByLabel(/^Antwort von /).fill('Hallo, danke für die Nachricht – erzählen Sie mehr!');
   const saved = page.waitForResponse((response) => /\/api\/leads\/[^/]+\/events$/.test(response.url()) && response.request().method() === 'POST');
@@ -255,7 +256,10 @@ test('Lead-Panel: Anfrage gesendet und Nachricht gesendet eintragen – auch au�
   const errors = trackErrors(page);
   await login(page);
   await page.getByTestId('nav-leads').click();
+  // Erst lesen, wenn die Liste von „Meine“ da ist – sonst stammt die erste Karte noch aus „Alle“ (anderer Gründer).
+  const mine = page.waitForResponse((response) => /\/api\/leads\?/.test(response.url()) && response.url().includes('owner=nick'));
   await page.getByRole('tab', { name: 'Meine' }).click();
+  await mine;
   const board = page.getByTestId('leads-board');
 
   const fresh = board.getByTestId('column-new').getByTestId('board-card').first();
@@ -265,7 +269,10 @@ test('Lead-Panel: Anfrage gesendet und Nachricht gesendet eintragen – auch au�
   await panel.getByTestId('action-invite-sent').click();
   await expect(panel.getByTestId('action-invite-sent')).toHaveCount(0);
   await expect(panel).toContainText('Vernetzungsanfrage gesendet');
-  expect((await findLead(page, 'nick', freshName)).stage).toBe('invited');
+  // Gespeichert wird im Hintergrund (Ausgangskorb) – nachsehen, bis es angekommen ist.
+  // Wem die erste Karte gehört, hängt davon ab, wann der Reiter „Meine“ geladen hat – nur die Stufe zählt hier.
+  const stageOf = async () => (await findLead(page, 'nick', freshName).catch(() => findLead(page, 'johannes', freshName))).stage;
+  await expect.poll(stageOf).toBe('invited');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
 
@@ -358,6 +365,8 @@ test('Angefangene Antwort: im Lead-Panel als gesendet eingetragen → die nächs
   const saved = page.waitForResponse((response) => /\/api\/leads\/[^/]+\/events$/.test(response.url()) && response.request().method() === 'POST');
   await actions.getByRole('button', { name: 'Nachricht eintragen' }).click();
   expect((await saved).ok()).toBe(true);
+  // Das Formular schließt sich nach dem Speichern – erst danach schließt Esc das Panel (sonst nur das Formular).
+  await expect(actions.getByTestId('action-text')).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
 

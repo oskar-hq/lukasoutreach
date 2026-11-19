@@ -178,6 +178,11 @@ export class PipelineRunner {
         examples(): string | null;
         markQualified(providerId: string, snapshot: FeedbackSnapshot): void;
       };
+      /**
+       * Optimierungs-Bericht (09.11., `learning/insights.ts`): nach jedem Lauf (auch Simulation, auch Abbruch) Trichter
+       * und Entscheidung je Treffer festhalten. Darf nicht werfen.
+       */
+      insights?: { recordRun(run: RunSnapshot, sources: ReadonlyMap<string, string>, info: { auto: boolean; founder: AuthFounderId | null }): void };
     },
   ) {}
 
@@ -185,7 +190,7 @@ export class PipelineRunner {
    * `limits.maxCostEur`: Kostengrenze für die KI in diesem Lauf (Tagesbudget der automatischen Suche) – ist sie erreicht,
    * liest der Lauf keine weiteren Profile, der Rest wird zurückgestellt (Warteliste, nächster Lauf).
    */
-  start(request: StartRunRequest, limits: { maxCostEur?: number } = {}, onEnd?: (run: RunSnapshot) => void): RunSnapshot {
+  start(request: StartRunRequest, limits: { maxCostEur?: number; auto?: boolean; founder?: AuthFounderId } = {}, onEnd?: (run: RunSnapshot) => void): RunSnapshot {
     const active = this.store.active();
     if (active) throw new RunBusyError(active.snapshot.id);
 
@@ -343,7 +348,7 @@ export class PipelineRunner {
     safely(() => memory.updateBacklog(done, deferred, now), undefined, log, run.id);
   }
 
-  private async execute(record: RunRecord, request: StartRunRequest, adapter: LeadSearchAdapter, limits: { maxCostEur?: number } = {}): Promise<void> {
+  private async execute(record: RunRecord, request: StartRunRequest, adapter: LeadSearchAdapter, limits: { maxCostEur?: number; auto?: boolean; founder?: AuthFounderId } = {}): Promise<void> {
     const run = record.snapshot;
     const { log, tracking, leads } = this.options;
     const minConfidence = typeof this.options.minConfidence === 'function' ? this.options.minConfidence() : this.options.minConfidence;
@@ -733,6 +738,7 @@ export class PipelineRunner {
       const cost = this.options.runCostEur ? safely(() => this.options.runCostEur!(run.id), 0, log, run.id) : 0;
       run.costEur = Math.round(cost * 10_000) / 10_000;
       if (adapter.mode === 'live') this.remember(run, sources);
+      if (this.options.insights) safely(() => this.options.insights!.recordRun(run, sources, { auto: limits.auto === true, founder: limits.founder ?? null }), undefined, log, run.id);
       log.info({ runId: run.id, status: run.status, ms: run.finishedAt - run.startedAt }, 'Lead-Suche beendet');
       // Vor dem Ereignis „end“ (z. B. Leads speichern, `run.saved`) – das Ereignis trägt dann schon das Ergebnis.
       const onEnd = this.onEnd.get(run.id);

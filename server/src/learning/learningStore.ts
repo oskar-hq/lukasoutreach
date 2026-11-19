@@ -1,6 +1,8 @@
 import {
   LEAD_FEEDBACK_REASON_LABELS,
   LEARNING_EXAMPLES_MAX,
+  LEARNING_QUERY_STALE_DAYS,
+  type LearningEfficiency,
   type LeadFeedback,
   type LeadFeedbackInput,
   type LeadFeedbackReason,
@@ -17,7 +19,9 @@ import type { Database } from '../db/database.js';
 /**
  * Lernen aus Lead-Qualität (Vertrag `shared/learning.ts`, Migration 31):
  *   - `setManual` – 👍/👎 am Lead; `markQualified` – „Qualifizieren“ in der Ergebnisliste (👍 ohne Cockpit-Lead).
- *   - `syncOutcomes` – Leads mit interessierter Antwort/Frage, Termin oder Übergabe werden automatisch „passt“.
+ *   - `syncOutcomes` – Leads mit interessierter Antwort/Frage, Termin oder Übergabe werden automatisch „passt“; Leads
+ *     aus der Suche, die ohne jeden Kontakt (keine Anfrage, keine Nachricht) auf „Verloren“ gesetzt wurden, automatisch
+ *     „passt nicht“ (09.11.: sonst sah die KI fast nur gute Beispiele). Wieder geöffnet → die Rückmeldung fällt weg.
  *   - `examplesText` – Beispiele für den Prompt der KI (ausgewogen, jüngste zuerst, von Hand vor Ergebnis).
  *   - Jede Rückmeldung zählt für die Suchanfrage, die das Profil fand (`search_lead_source` → `search_queries`).
  * Rückmeldungen gehören zum Lead: Der Löschweg der Leads (`LeadStore.purge`) löscht sie mit.
@@ -57,6 +61,19 @@ const OUTCOME_SQL = `
   SELECT * FROM leads
   WHERE (stage IN ('meeting', 'handed_over') OR json_extract(conversation, '$.replyIntent') IN ('interested', 'question'))
     AND provider_id NOT IN (SELECT provider_id FROM lead_feedback)`;
+
+/** Aussortiert, bevor je jemand Kontakt aufgenommen hat – das Team hielt den Lead nicht für passend. */
+const NO_CONTACT_EVENTS = "('invite_sent', 'invite_accepted', 'message_sent', 'message_received', 'meeting_booked', 'handed_over')";
+const DISMISSED_SQL = `
+  SELECT * FROM leads
+  WHERE stage = 'lost' AND json_extract(origin, '$.kind') = 'search'
+    AND provider_id NOT IN (SELECT provider_id FROM lead_feedback)
+    AND NOT EXISTS (SELECT 1 FROM lead_events e WHERE e.lead_id = leads.id AND e.kind IN ${NO_CONTACT_EVENTS})`;
+/** Automatische „passt nicht“, deren Lead nicht mehr verloren ist (wieder geöffnet). */
+const REOPENED_SQL = `
+  SELECT f.* FROM lead_feedback f JOIN leads l ON l.provider_id = f.provider_id
+  WHERE f.source = 'outcome' AND f.verdict = 'bad' AND l.stage != 'lost'`;
+export const DISMISSED_OUTCOME = 'ohne Kontakt auf „Verloren“ gesetzt';
 
 /** „„Projektentwicklung“ in der Headline und Rolle … – ohne KI eingestuft.“ → „Projektentwicklung“. */
 export function quickTermOf(reason: string | null | undefined): string | null {
@@ -138,13 +155,30 @@ export class LearningStore {
    * Ergebnisse ohne Rückmeldung nachtragen (Antwort interessiert/Frage, Termin, Übergabe). Billig: eine Abfrage, nur
    * neue Treffer. Gibt die Leads zurück, deren Rückmeldung neu ist (für `leads.feedback`).
    */
-  syncOutcomes(toLead: (row: unknown) => CockpitLead, now: number): Array<{ id: string; feedback: LeadFeedback }> {
+  syncOutcomes(toLead: (row: unknown) => CockpitLead, now: number): Array<{ id: string; feedback: LeadFeedback | null }> {
     const rows = this.db.prepare(OUTCOME_SQL).all() as unknown[];
-    const changed: Array<{ id: string; feedback: LeadFeedback }> = [];
+    const changed: Array<{ id: string; feedback: LeadFeedback | null }> = [];
     for (const row of rows) {
       const lead = toLead(row);
       const feedback = this.outcome(lead, now);
       if (feedback) changed.push({ id: lead.id, feedback });
+    }
+    for (const row of this.db.prepare(REOPENED_SQL).all() as unknown as FeedbackRow[]) {
+      this.remove(row);
+      const lead = this.db.prepare('SELECT id FROM leads WHERE provider_id = ?').get(row.provider_id) as { id: string } | undefined;
+      if (lead) changed.push({ id: lead.id, feedback: null });
+    }
+    for (const row of this.db.prepare(DISMISSED_SQL).all() as unknown[]) {
+      const lead = toLead(row);
+      const feedback = this.write(lead.person.providerId, snapshotOfLead(lead), {
+        verdict: 'bad',
+        source: 'outcome',
+        reason: null,
+        note: null,
+        outcome: DISMISSED_OUTCOME,
+        at: now,
+      });
+      changed.push({ id: lead.id, feedback });
     }
     return changed;
   }
@@ -188,7 +222,7 @@ export class LearningStore {
       const why =
         row.verdict === 'good'
           ? `passt${row.outcome ? ` (${row.outcome})` : ''}`
-          : `passt nicht${row.reason ? ` (${LEAD_FEEDBACK_REASON_LABELS[row.reason]})` : ''}`;
+          : `passt nicht${row.reason ? ` (${LEAD_FEEDBACK_REASON_LABELS[row.reason]})` : row.outcome ? ` (${row.outcome})` : ''}`;
       const note = row.note ? ` · Notiz: ${clip(row.note, 80)}` : '';
       return `- ${why}: Headline ${clip(row.headline)} · Position ${clip(row.position, 80)} · Firma ${clip(row.company, 80)} · Branche ${clip(row.industry, 60)}${note}`;
     });
@@ -201,7 +235,7 @@ export class LearningStore {
     return { text, count: rows.length };
   }
 
-  summary(now: number): LearningSummary {
+  summary(now: number, efficiency?: LearningEfficiency): LearningSummary {
     const rows = this.db.prepare('SELECT * FROM lead_feedback').all() as unknown as FeedbackRow[];
     const feedback = { good: 0, bad: 0, manual: 0, outcome: 0 };
     const reasons = new Map<LeadFeedbackReason, number>();
@@ -218,12 +252,16 @@ export class LearningStore {
       if (row.verdict === 'good') entry.good++;
       weeks.set(week, entry);
     }
-    const queryRows = this.db
-      .prepare('SELECT label, qualified, good, bad FROM search_queries WHERE good > 0 OR bad > 0 OR qualified > 0')
-      .all() as unknown as LearningQuery[];
+    const staleBefore = now - LEARNING_QUERY_STALE_DAYS * 24 * 60 * 60 * 1000;
+    const queryRows = (
+      this.db
+        .prepare('SELECT label, qualified, good, bad, updated_at FROM search_queries WHERE good > 0 OR bad > 0 OR qualified > 0')
+        .all() as unknown as Array<LearningQuery & { updated_at: number }>
+    ).map(({ updated_at, ...query }): LearningQuery => ({ ...query, lastSearchedAt: updated_at, stale: updated_at < staleBefore }));
+    // Aktuelle Anfragen vor alten (09.11.: oben standen noch Bauträger-Anfragen von vor dem Zielgruppenwechsel).
     const topQueries = queryRows
       .filter((query) => query.good > 0 || query.qualified > 0)
-      .sort((a, b) => b.good - a.good || b.qualified - a.qualified || a.bad - b.bad || a.label.localeCompare(b.label))
+      .sort((a, b) => Number(a.stale) - Number(b.stale) || b.good - a.good || b.qualified - a.qualified || a.bad - b.bad || a.label.localeCompare(b.label))
       .slice(0, 5);
     const weakQueries = queryRows
       .filter((query) => query.bad > 0 && query.bad >= query.good)
@@ -237,6 +275,7 @@ export class LearningStore {
       weakQueries,
       badReasons: [...reasons].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason)),
       hints: this.hints(rows, weakQueries),
+      ...(efficiency ? { efficiency } : {}),
     };
   }
 

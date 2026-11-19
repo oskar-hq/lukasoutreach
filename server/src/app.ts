@@ -1,5 +1,12 @@
 import { SearchMemory } from './pipeline/searchMemory.js';
+import { ShadowStore, setShadowSink } from './ai/shadow.js';
 import { AiUsageStore, setAiUsageSink } from './ai/usage.js';
+import { InsightsStore } from './learning/insights.js';
+import { registerTelemetry } from './telemetry/routes.js';
+import { registerFeedbackRoutes } from './feedback/routes.js';
+import { FeedbackStore } from './feedback/store.js';
+import { noteJob, trackJob } from './telemetry/store.js';
+import { captureLog } from './telemetry/logs.js';
 import { registerAssistantRoutes } from './assistant/routes.js';
 import { registerMcpRoutes } from './mcp/routes.js';
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
@@ -34,6 +41,8 @@ import { registerMessageRoutes } from './messages/routes.js';
 import { LinkedInService } from './linkedin/service.js';
 import { WarmupService } from './linkedin/warmup.js';
 import { AccountPrefsStore } from './linkedin/accountPrefs.js';
+import { ConnectionStore, NewContactImporter } from './linkedin/connections.js';
+import { LinkedInAudit } from './linkedin/audit.js';
 import type { LeadSearchAdapter } from './pipeline/adapter.js';
 import { AdapterRef } from './pipeline/adapterRef.js';
 import { SearchProfileSchema } from './pipeline/profileSchema.js';
@@ -124,7 +133,17 @@ function logRequest(request: FastifyRequest) {
 function loggerOptions(logger: boolean | object): boolean | object {
   if (logger === false) return false;
   const base = logger === true ? {} : (logger as { serializers?: object });
-  return { ...base, serializers: { req: logRequest, ...base.serializers } };
+  return {
+    ...base,
+    serializers: { req: logRequest, ...base.serializers },
+    // Warnungen und Fehler zusätzlich in die Datenbank (Server-Logs per Claude-App, 09.11.) – geschwärzt.
+    hooks: {
+      logMethod(this: unknown, args: unknown[], method: (...rest: unknown[]) => void, level: number) {
+        captureLog(args, level);
+        return method.apply(this, args);
+      },
+    },
+  };
 }
 
 export function buildApp({
@@ -180,11 +199,14 @@ export function buildApp({
     if (!scheduleBackups || config.backup.hourUtc === null) return;
     stopBackups = scheduleDailyBackup(
       () => {
+        const started = Date.now();
         app.log.info({ file: backups.create('scheduled').name }, 'Datenbank gesichert');
+        noteJob('sicherung', Date.now() - started, true);
         notifications.resolve('backup:scheduled');
       },
       config.backup.hourUtc,
       (error) => {
+        noteJob('sicherung', 0, false, error instanceof Error ? error.message : String(error));
         app.log.error({ err: error }, 'Sicherung der Datenbank fehlgeschlagen');
         notifications.raise(NOTICES.backupFailed(error instanceof Error && error.message ? error.message : 'unbekannter Fehler'));
       },
@@ -195,6 +217,8 @@ export function buildApp({
   app.addHook('onClose', () => db.close());
   // Feste Unipile-Limits je LinkedIn-Account (17.10.): ein Zähler für alle Läufe, auch nach neu gebautem Adapter.
   const accountUsage = new DbAccountUsage(db, () => config.linkedin.workHours.timeZone);
+  // Nutzungsdaten (09.11., shared/telemetry.ts): jede API-Anfrage, Ereignisse der Oberfläche, Hintergrund-Jobs.
+  registerTelemetry(app, { db, timeZone: () => config.linkedin.workHours.timeZone });
   initialAdapter.useAccountUsage?.(accountUsage);
   // Einstellungen je LinkedIn-Account (21.10.): Such-Reihenfolge und eigene Tagesgrenzen.
   const accountPrefs = new AccountPrefsStore(db);
@@ -223,12 +247,18 @@ export function buildApp({
     syncRegistrations();
   });
   registerNotificationRoutes(app, { center: notifications, sync: syncRegistrations });
+  // Feedback vom Kunden (09.11., shared/feedback.ts): Bilder unter DATA_DIR/feedback.
+  registerFeedbackRoutes(app, { store: new FeedbackStore(db, config.dataDir), notifications });
   // Suchgedächtnis der Lead-Suche (Migration 28): Cursor und Ertrag je Suchanfrage, geprüfte Profile aller Läufe.
   const searchMemory = new SearchMemory(db);
   // KI-Kosten (Migration 29): jeder Aufruf der Claude-API landet hier; die Simulation zeigt erfundene Werte.
   const aiUsage = new AiUsageStore(db);
   setAiUsageSink((purpose, model, usage, runId) => aiUsage.record(purpose, model, usage, Date.now(), runId));
   if (config.mode === 'mock' && aiUsage.isEmpty()) aiUsage.seedDemo(Date.now());
+  // Optimierungs-Bericht (09.11.): Modellvergleich und Trichter je Lauf.
+  const shadowStore = new ShadowStore(db);
+  setShadowSink((entry) => shadowStore.record(entry, Date.now()));
+  const insights = new InsightsStore(db);
   // Demo-Reset leert auch die automatische Suche (Pläne, Zustand, geprüfte Profile) – der Planer entsteht weiter unten.
   // Welche Gründer-Accounts verbunden sind (18.10.) – eine Liste für Tagesstapel und Senden.
   const founderAccounts = new FounderAccounts({ config });
@@ -246,8 +276,18 @@ export function buildApp({
       notifications.resetDemo();
     },
   });
+  const store = new RunStore();
+  // Anfragen von Hand und neue Kontakte (Teammeeting 05.11., Vertrag shared/linkedin.ts).
+  const connections = new ConnectionStore(db, leads);
+  let importer: NewContactImporter | null = null;
   // Echte LinkedIn-Aktionen (Phase 3, Vertrag shared/linkedin.ts).
   const linkedin = new LinkedInService({
+    connections,
+    onNewContacts: () => {
+      // Nach einem Stopp (Tageslimit, Zugang, KI ausgefallen) ruht die Übernahme – nicht bei jedem Abgleich neu anrennen.
+      if (!importer || importer.resting()) return;
+      trackJob('neue_kontakte', () => importer!.run(), () => importer!.lastFailure).catch((error) => app.log.error({ err: error }, 'Neue LinkedIn-Kontakte nicht übernommen'));
+    },
     config,
     db,
     leads,
@@ -260,7 +300,22 @@ export function buildApp({
   });
   // Accounts aufwärmen (21.10.): Scraping-Accounts vernetzen sich nebenbei mit der Branche.
   const warmup = new WarmupService({ config, db, log: app.log, usage: accountUsage, prefs: accountPrefs, minPauseMs: linkedinTest?.minPauseMs });
-  registerLinkedInRoutes(app, { leads, linkedin, founderAccounts, warmup, accountPrefs });
+  importer = new NewContactImporter({
+    config,
+    store: connections,
+    leads,
+    log: app.log,
+    adapter: () => adapterRef.current(),
+    // Nie gleichzeitig mit einer Lead-Suche über dieselben Accounts.
+    busy: () => store.active() !== undefined,
+    importChat: (leadId) => linkedin.importContactChat(leadId),
+    minPauseMs: linkedinTest?.minPauseMs,
+  });
+  const audit = new LinkedInAudit({ config, db, leads, linkedin, connections, importer, log: app.log, minPauseMs: linkedinTest?.minPauseMs });
+  registerLinkedInRoutes(app, { leads, linkedin, founderAccounts, warmup, accountPrefs, connections, importer, audit });
+  app.decorate('linkedinService', linkedin);
+  app.decorate('linkedinAudit', audit);
+  app.decorate('contactImporter', importer);
   if (scheduleBackups) warmup.start();
   app.addHook('onClose', async () => warmup.close());
   if (scheduleBackups) linkedin.startBackgroundSync();
@@ -292,7 +347,6 @@ export function buildApp({
     });
     app.addHook('onClose', async () => stopRetention?.());
   }
-  const store = new RunStore();
   const tracking = new TrackingStore(db, config.dataDir);
   app.addHook('onReady', () => tracking.load());
   const runner = new PipelineRunner(adapter, store, {
@@ -307,6 +361,7 @@ export function buildApp({
     memory: searchMemory,
     autoQualifyTerms: () => config.autoQualifyTerms,
     runCostEur: (runId) => aiUsage.runCostUsd(runId) * config.anthropic.usdToEur,
+    insights,
     // Lernen aus Lead-Qualität (13.10., shared/learning.ts): vor jedem Lauf neue Ergebnisse übernehmen, dann Beispiele.
     learning: {
       examples: () => {
@@ -548,7 +603,7 @@ export function buildApp({
       // Leads selbst an – bisher erst nach „In den Tagesstapel“ plus 60 s Rückgängig-Fenster im Browser; wer vorher
       // neu lud oder die Seite schloss, verlor sie.
       const actor = owner ? actorFor(request.authUser, owner) : null;
-      const run = runner.start(parsed.data satisfies StartRunRequest, {}, owner ? (finished) => saveRunLeads(finished.id, owner, actor) : undefined);
+      const run = runner.start(parsed.data satisfies StartRunRequest, owner ? { founder: owner } : {}, owner ? (finished) => saveRunLeads(finished.id, owner, actor) : undefined);
       return reply.status(202).send({ run });
     } catch (error) {
       if (error instanceof RunBusyError) return sendError(reply, 409, 'busy', error.message, error.runId);

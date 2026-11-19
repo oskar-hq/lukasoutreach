@@ -134,6 +134,17 @@ Verbindungstest, Konten und eigene Passwörter) ist erledigt.
   - Abbruch bei Limit- und Zugangsfehlern;
   - keine echten Aktionen ohne ausdrücklichen Auftrag.
 - **Nur dokumentierte Endpunkte** von Unipile, Anthropic und Meta. Secrets nie in Code, Logs oder Fehlermeldungen.
+- **Menschlicher arbeiten (Teammeeting 05.11.):** Anfragen je Gründer-Account über den Tag verteilt (Standard),
+  sofort oder nur von Hand (Testwoche Johannes: Einstellungen → LinkedIn → Accounts → „Nur von Hand“, 7 Tage). Von Hand
+  im Sales Navigator gesendete Anfragen erkennt der Abgleich, zählt sie (Startseite „Heute X von Y“) und übernimmt
+  angenommene Kontakte als Leads (mit Firmenseite + KI; ohne gesehene Anfrage nur, wenn die KI sie als passend
+  einstuft). Dashboard → Vernetzen: Statistik je Tag/Gründer und Überprüfung der letzten 14 Tage. Automatische Suche
+  mit zufälligem Start (z. B. 06:30 + 90 Min.). Review-Termin: Donnerstag nach der Testwoche.
+- **Kosten und Lernen (09.11.):** Vorprüfung läuft auf einem kleinen Modell (`ANTHROPIC_PRESCREEN_MODEL`, Standard Haiku
+  5.5), 10 % der Einstufungen zusätzlich mit einem Vergleichsmodell (zählt nicht). Dashboard → Lernen → „Bericht für
+  Claude (.md)“ liefert alle Rohzahlen zum Optimieren; ohne Kontakt verworfene Leads zählen automatisch als „passt nicht“.
+- **Alles messen (09.11.):** Nutzungsdaten der Oberfläche, jede API-Anfrage und Hintergrund-Jobs → `usage_report`;
+  Suche/KI/Lead-Qualität → `optimization_report`. Jede neue Funktion bekommt ein MCP-Tool und `data-testid`s.
 - **Zwei Agents:** Frontend und Backend parallel mit getrennten Bereichen. Der Vertrag liegt in `shared/`, die
   Abstimmung in den Handoff-Dateien unter `docs/agents/`.
 - **Senden von Hand** (05.10.): keine automatischen LinkedIn-Aktionen; das Cockpit schlägt Texte vor, gesendet wird
@@ -149,4 +160,4 @@ Verbindungstest, Konten und eigene Passwörter) ist erledigt.
 - Deutsch, „du“, Schritt für Schritt. Server-Befehle einzeln geben, mit Hinweis, was als Ausgabe erwartet wird.
 - Der Nutzer arbeitet viel mit Screenshots. Sind darin Schlüssel oder Passwörter zu sehen: nie wiederholen, auf
   Erneuerung hinweisen.
-- Gemergt wird nur auf Ansage des Nutzers oder durch ihn selbst auf GitHub.
+- PRs merged der Agent seit 09.11. direkt nach dem Öffnen selbst, ohne auf die CI zu warten (Wunsch des Nutzers).

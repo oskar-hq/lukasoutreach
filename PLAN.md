@@ -176,6 +176,12 @@ Meta-Werbebibliothek (wer gerade Anzeigen schaltet, geht seit 07.10. markiert mi
 | POST | `/api/leads/unsent-invites/requeue` | `{ ids }` → zurück auf „Neu“ (alte Buchung wird Notiz), `{ requeued, skipped }` |
 | PATCH | `/api/leads/:id` | Follow-up planen bzw. Wiedervorlage (`followUpPlan`: bis Datum pausiert, dann wieder in den Aufgaben, optional in eine eigene Spalte), Stufe von Hand (`stage`, Board – auch zurück), Antwort einordnen (`replyInterest`: interessiert/nicht interessiert), zuständigen Gründer, nächsten Schritt, eigene Board-Spalte (`boardColumn`), Deal Value (`dealValue`, Euro), Meta-Ads von Hand (`metaAds`), Hiring-Signal von Hand (`hiring`: `{ role }` bzw. `null`) oder 👍/👎 zur Lead-Qualität (`feedback`, `shared/learning.ts`) ändern |
 | GET | `/api/learning` | Was der Scraper aus Rückmeldungen gelernt hat (`LearningSummary`): Beispiele für die KI, Trefferquote je Woche, beste/schwächste Suchanfragen, Hinweise |
+| GET | `/api/learning/report?days=30` | Optimierungs-Bericht als Markdown-Datei (Download, ohne Namen): KI-Kosten je Zweck × Modell, Läufe, Suchanfragen, LinkedIn-Abrufe, Entscheidungen je Treffer, Modellvergleich, Rückmeldungen (09.11.) |
+| POST | `/api/feedback` | Feedback vom Kunden (`FeedbackCreateRequest`: Text, Art, Zusammenhang, Bilder als data-URL, bis 16 MB) → 201 `FeedbackItem` (09.11.) |
+| GET | `/api/feedback?status=&mine=1` | Meldungen (Mitarbeiter nur eigene) · `GET /api/feedback/:id` · `GET /api/feedback/:id/images/:n` |
+| PATCH | `/api/feedback/:id` | Stand und Antwort setzen (Gründer/Admin) → Meldung in der Glocke des Melders |
+| POST | `/api/telemetry/events` | Nutzungsdaten der Oberfläche (`TelemetryBatch`, ohne Inhalte) → 204, Kaputtes wird still verworfen (09.11.) |
+| GET | `/api/telemetry/report?days=14` | Nutzungs-Bericht als Markdown: Personen, Geräte, Ansichten, Klicks, Kürzel, Zeit je Karte, Fehler, API je Route, Hintergrund-Jobs |
 | GET | `/api/leads/:id/export` | Auskunft (DSGVO Art. 15): alle gespeicherten Daten des Leads als JSON-Datei (`LeadDataExport`); nur Admin/Gründer |
 | DELETE | `/api/leads/:id` | Sofort endgültig löschen (Art. 17, gleicher Weg wie die Frist nach „Verloren“: Fingerabdruck bleibt, Dashboard-Zahlen anonym) → `DeleteLeadResponse`; nur Admin/Gründer |
 | GET | `/api/conversations` | Chats: Leads mit Nachrichten, neueste zuerst (`?owner=`), je Chat `account` (über welchen Account) und `replies` (25.10.) |
@@ -210,6 +216,11 @@ Meta-Werbebibliothek (wer gerade Anzeigen schaltet, geht seit 07.10. markiert mi
 | POST | `/api/linkedin/sync` | Angenommene Anfragen und Antworten jetzt abholen → `LinkedInSyncResponse` (live zusätzlich alle 15 min automatisch) |
 | GET | `/api/linkedin/accounts` | Bei Unipile verbundene LinkedIn-Accounts zur Auswahl (`LinkedInAccountsResponse`, `assignedTo` aus den Einstellungen); nur Admin/Gründer · 409 ohne Unipile-Zugang · 503 |
 | POST | `/api/linkedin/test-invite` | Genau eine Test-Vernetzungsanfrage (`LinkedInTestInviteRequest`), gleiche Grenzen, Warteschlange und Pause; Simulation sendet nichts; nur der Gründer über seinen eigenen Account (Admin, Mitarbeiter, fremder Gründer → 403) |
+| PUT | `/api/linkedin/accounts/:id/invite-mode` | Wie Anfragen über einen Gründer-Account rausgehen (`LinkedInInviteModeRequest`: `spread`/`instant`/`manual` + Ende); nur Admin/Gründer (05.11.) |
+| DELETE | `/api/leads/:id/linkedin/invite` | Eingeplante Anfrage zurücknehmen → `LeadDetailResponse` (05.11.) |
+| GET/POST | `/api/linkedin/new-contacts`, `/api/linkedin/new-contacts/:id/import` | Neue Kontakte aus LinkedIn (übernommen/aussortiert) bzw. aussortierten doch übernehmen (05.11.) |
+| GET/POST | `/api/linkedin/audit` | Überprüfung „wurde etwas übersehen?“ (`LinkedInAuditStatus`, Hintergrund, nur lesend) (05.11.) |
+| GET | `/api/linkedin/invite-stats?days=14` | Anfragen je Tag (Cockpit/von Hand) und Annahmequote je Gründer (`LinkedInInviteStatsResponse`) (05.11.) |
 | POST | `/api/linkedin/resume` | Pause eines Accounts aufheben (`LinkedInResumeRequest` → `LinkedInStatusResponse`); Mitarbeiter nur für seinen Gründer |
 | GET | `/api/settings` | Einstellungen (Wert bzw. bei Geheimnissen nur „gesetzt · …abcd“, Quelle Software/.env/Standard) – Typen in `shared/settings.ts` |
 | PUT | `/api/settings` | Einstellungen ändern (`null` = zurück zur .env), bei Schlüsseln mit Passwort, Server-Werte nur auf Probe |

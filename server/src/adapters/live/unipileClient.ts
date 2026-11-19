@@ -95,8 +95,15 @@ export interface UnipileSearchResponse {
 }
 
 export interface UnipileInvitation {
+  id?: string;
+  /** Zeitpunkt laut LinkedIn (ISO), kann fehlen. */
+  parsed_datetime?: string | null;
+  /** Name der eingeladenen Person. */
+  invited_user?: string | null;
   invited_user_id?: string | null;
   invited_user_public_id?: string | null;
+  /** Headline der Person. */
+  invited_user_description?: string | null;
 }
 
 /** Profil (Felder laut Unipile-Schema LinkedinUserProfile). */
@@ -133,6 +140,8 @@ export interface UnipileRelation {
   public_identifier?: string;
   first_name?: string;
   last_name?: string;
+  headline?: string;
+  public_profile_url?: string;
   created_at?: number;
 }
 

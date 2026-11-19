@@ -25,6 +25,8 @@ import { WorkIntro } from './components/onboarding/WorkIntro';
 import { sessionFounderOf, useAuth } from './state/auth';
 import { readStackScope, useDemo } from './state/demo';
 import { EASE_OUT } from './lib/motion';
+import * as telemetry from './lib/telemetry';
+import { FeedbackHost } from './components/feedback/FeedbackHost';
 import { McpConsent } from './components/mcp/McpConsent';
 import { MCP_CONSENT_PARAM, MCP_LEAD_PARAM } from '../shared/mcp';
 
@@ -160,11 +162,21 @@ function Shell() {
     window.scrollTo(0, 0);
   }, [state.view]);
 
+  // Nutzungsdaten (09.11., lib/telemetry.ts): nur solange jemand angemeldet ist, also solange die Hülle steht.
+  useEffect(() => {
+    telemetry.start();
+    return () => telemetry.stop();
+  }, []);
+  useEffect(() => {
+    telemetry.setView(state.view);
+  }, [state.view]);
+
   // Nach Abmelden/Reset blendet die Hülle noch kurz aus – dann gibt es keinen Gründer mehr.
   if (!founder) return null;
 
   return (
     <LeadSearchProvider>
+      <FeedbackHost />
       <LinkedInProvider>
       <TemplatesProvider>
       <ActivityProvider>

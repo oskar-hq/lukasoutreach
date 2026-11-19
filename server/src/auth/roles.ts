@@ -10,6 +10,7 @@ import { authRole, canEditBoardColumns, canEditSettings, defaultFounderName, can
 export const ROLE_MESSAGES = {
   settings: 'Mitarbeiter-Konten können die Einstellungen nicht sehen oder ändern.',
   system: 'Mitarbeiter-Konten können Sicherungen und Updates nicht sehen oder auslösen.',
+  telemetry: 'Mitarbeiter-Konten können Nutzungs-Bericht, Systemzustand und Server-Logs nicht sehen.',
   templates: 'Mitarbeiter-Konten können Vorlagen nur lesen, nicht ändern.',
   accounts: 'Mitarbeiter-Konten können keine Konten verwalten.',
   linkedin: 'Admin-Konten senden nicht über LinkedIn – trag die Aktion ein.',
@@ -93,7 +94,7 @@ function under(path: string, prefix: string): boolean {
 
 const LINKEDIN_SEND = /^\/api\/leads\/[^/]+\/linkedin\/(invite|message)\/?$/;
 /** Einrichten in der Oberfläche (Vertrag shared/linkedin.ts): wie Einstellungen nur Admin und Gründer. */
-const LINKEDIN_SETUP = /^\/api\/linkedin\/(accounts(\/[^/]+(\/limits)?)?|warmup|test-invite|test-profile|test-message|test-connect)\/?$/;
+const LINKEDIN_SETUP = /^\/api\/linkedin\/(accounts(\/[^/]+(\/(limits|disabled|invite-mode))?)?|warmup|test-invite|test-profile|test-message|test-connect)\/?$/;
 /** Test-Anfrage und Test-Nachricht senden echt: wie Senden im Cockpit nie mit einem Admin-Konto. */
 const LINKEDIN_TEST_INVITE = /^\/api\/linkedin\/(test-invite|test-message|test-connect)\/?$/;
 /** Betroffenenrechte (Vertrag shared/leads.ts): Auskunft und endgültiges Löschen nur Admin und Gründer. */
@@ -105,6 +106,8 @@ export function roleDenial(user: Pick<AuthUser, 'founder' | 'role'>, method: str
   if (!canEditSettings(user)) {
     if (under(path, '/api/settings')) return ROLE_MESSAGES.settings;
     if (under(path, '/api/system')) return ROLE_MESSAGES.system;
+    // Nutzungsdaten senden dürfen alle, lesen (Bericht, Zustand, Logs) nur Gründer und Admin.
+    if (under(path, '/api/telemetry') && path !== '/api/telemetry/events') return ROLE_MESSAGES.telemetry;
     if (under(path, '/api/templates') && !READ_METHODS.has(method)) return ROLE_MESSAGES.templates;
     if (LINKEDIN_SETUP.test(path)) return ROLE_MESSAGES.linkedinSetup;
   }

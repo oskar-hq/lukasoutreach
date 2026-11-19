@@ -74,7 +74,42 @@ export interface LearningQuery {
   good: number;
   /** Leads dieser Anfrage mit 👎. */
   bad: number;
+  /** Zuletzt gesucht (ms). Fehlt bei älteren Backends. */
+  lastSearchedAt?: number | null;
+  /**
+   * Seit `LEARNING_QUERY_STALE_DAYS` Tagen nicht mehr gesucht – z. B. weil die Zielgruppe gewechselt hat (27.10.:
+   * Bauträger raus). Der Ertrag ist alt; die Oberfläche zeigt das an. Fehlt bei älteren Backends.
+   */
+  stale?: boolean;
 }
+
+/** Ab so vielen Tagen ohne Suche gilt eine Anfrage als „nicht mehr gesucht“ (`LearningQuery.stale`). */
+export const LEARNING_QUERY_STALE_DAYS = 14;
+
+/** Unter so vielen bewerteten Leads in einer Woche zeigt die Oberfläche keine Trefferquote („zu wenig Daten“). */
+export const LEARNING_WEEK_MIN_RATED = 5;
+
+/**
+ * Wie sparsam die Suche mit LinkedIn umgeht (Wunsch des Nutzers 09.11.): Profilabrufe aller Accounts in den letzten
+ * `days` Tagen gegen die in dieser Zeit qualifizierten Leads aus der Lead-Suche. Weniger ist besser – jeder Abruf
+ * zählt gegen das Tageslimit der Accounts.
+ */
+export interface LearningEfficiency {
+  days: number;
+  profileFetches: number;
+  qualified: number;
+  /** profileFetches ÷ qualified, null ohne qualifizierten Lead. */
+  perQualified: number | null;
+}
+
+/**
+ * Optimierungs-Bericht (Wunsch des Nutzers 09.11.): `GET /api/learning/report?days=30` liefert eine Markdown-Datei
+ * (`text/markdown`, Download) mit allen Rohzahlen zu KI-Kosten, Modellen, Modellvergleich, Suchanfragen,
+ * LinkedIn-Abrufen, Entscheidungen je Treffer und Rückmeldungen – zum Einfügen in einen Chat mit Claude. Ohne Namen
+ * und Profil-Links.
+ */
+export const LEARNING_REPORT_DAYS_DEFAULT = 30;
+export const LEARNING_REPORT_DAYS_MAX = 180;
 
 /** `GET /api/learning` – was der Scraper bisher gelernt hat. */
 export interface LearningSummary {
@@ -95,4 +130,6 @@ export interface LearningSummary {
    * ‚Vermögensaufbau‘ prüfen“. Die Software ändert dabei nichts selbst.
    */
   hints: string[];
+  /** Profilabrufe je qualifiziertem Lead. Fehlt bei älteren Backends. */
+  efficiency?: LearningEfficiency;
 }

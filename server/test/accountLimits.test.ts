@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import { DEFAULT_SEARCH_PROFILE, type RunSnapshot } from '../../shared/leadSearch.js';
 import { createLiveAdapter, scrapeAccounts, searchAccounts } from '../src/adapters/live/liveAdapter.js';
+import { MockAdapter } from '../src/adapters/mock/mockAdapter.js';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { openDatabase } from '../src/db/database.js';
@@ -27,8 +28,9 @@ async function setup(
   prefill: (usage: DbAccountUsage, prefs: AccountPrefsStore) => void = () => {},
   downAccounts?: Record<string, number>,
   fetchCompany = false,
+  failParameters?: Record<string, number>,
 ) {
-  const unipile = await startFakeUnipile({ accounts: FOUR_ACCOUNTS, downAccounts });
+  const unipile = await startFakeUnipile({ accounts: FOUR_ACCOUNTS, downAccounts, failParameters });
   servers.push(unipile);
   const dataDir = tempDataDir();
   const db = openDatabase(dataDir);
@@ -337,4 +339,78 @@ test('Nicks Account bei Unipile getrennt: Suche läuft trotzdem weiter, nichts w
   assert.equal(unipile.requests.filter((r) => /^\/api\/v1\/users\/ACo/.test(r.path)).length, 4);
   assert.ok(!unipile.requests.some((r) => r.query.get('account_id') === 'acc_nick'));
   assert.ok(adapter.setupWarnings().some((warning) => /Kontakte von Nick werden gerade nicht geprüft \(Account bei Unipile nicht verbunden\)/.test(warning)));
+});
+
+test('Account deaktiviert (03.11.): kein Traffic mehr darüber – weder Suche noch Profile noch Firmenseiten', async () => {
+  const { run, unipile, profileFetches, companyFetches, perAccount } = await setup(
+    (_usage, prefs) => {
+      prefs.setLimits('acc_scrape1', { profilesPerDay: 50 });
+      prefs.setDisabled('acc_scrape2', true);
+    },
+    undefined,
+    true,
+  );
+  const result = await run(4);
+  assert.equal(result.status, 'done', JSON.stringify(result.error));
+  const traffic = unipile.requests.filter((r) => r.query.get('account_id') === 'acc_scrape2');
+  assert.equal(traffic.length, 0, JSON.stringify(traffic.map((r) => r.path)));
+  assert.equal(perAccount(profileFetches()).acc_scrape2, 0);
+  // Firmenseiten weichen auf den übrigen Scraping-Account aus (nie die Gründer).
+  assert.deepEqual(perAccount(companyFetches()), { acc_nick: 0, acc_johannes: 0, acc_scrape1: 4, acc_scrape2: 0 });
+});
+
+test('Alle Such-Accounts deaktiviert: verständlicher Abbruch, keine einzige Anfrage an LinkedIn', async () => {
+  const { run, unipile } = await setup((_usage, prefs) => {
+    for (const id of ALL) prefs.setDisabled(id, true);
+  });
+  const result = await run(3);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.error?.title, 'Alle LinkedIn-Accounts deaktiviert');
+  assert.equal(unipile.requests.filter((r) => r.query.get('account_id')).length, 0);
+});
+
+test('Deaktivieren per Knopf: Route speichert, Account-Liste zeigt es, Grenzen bleiben; wieder einschalten geht', async () => {
+  const dataDir = tempDataDir();
+  const config = loadConfig({ LEAD_SEARCH_MODE: 'mock', DATA_DIR: dataDir });
+  const app = buildApp({ config, adapter: new MockAdapter(0), logger: false, requireSession: false });
+  after(() => app.close());
+  const list = async () => (await app.inject({ method: 'GET', url: '/api/linkedin/accounts' })).json() as { accounts: Array<{ id: string; disabled?: boolean; limits?: { profilesPerDay: number | null } }> };
+  const [first] = (await list()).accounts;
+  assert.equal(first.disabled, false);
+  await app.inject({ method: 'PUT', url: `/api/linkedin/accounts/${first.id}/limits`, payload: { profilesPerDay: 7 } });
+  const off = await app.inject({ method: 'PUT', url: `/api/linkedin/accounts/${first.id}/disabled`, payload: { disabled: true } });
+  assert.equal(off.statusCode, 200, off.body);
+  assert.deepEqual(off.json(), { disabled: true });
+  let account = (await list()).accounts.find((a) => a.id === first.id)!;
+  assert.equal(account.disabled, true);
+  assert.equal(account.limits?.profilesPerDay, 7);
+  const bad = await app.inject({ method: 'PUT', url: `/api/linkedin/accounts/${first.id}/disabled`, payload: { disabled: 'ja' } });
+  assert.equal(bad.statusCode, 400);
+  await app.inject({ method: 'PUT', url: `/api/linkedin/accounts/${first.id}/disabled`, payload: { disabled: false } });
+  account = (await list()).accounts.find((a) => a.id === first.id)!;
+  assert.equal(account.disabled, false);
+  assert.equal(account.limits?.profilesPerDay, 7);
+});
+
+test('Gründer-Account deaktiviert: auch seine Kontakte werden nicht geladen, die Suche läuft weiter', async () => {
+  const { run, unipile } = await setup((_usage, prefs) => prefs.setDisabled('acc_nick', true));
+  const result = await run(3);
+  assert.equal(result.status, 'done', JSON.stringify(result.error));
+  assert.equal(unipile.requests.filter((r) => r.query.get('account_id') === 'acc_nick').length, 0);
+});
+
+test('Erster Such-Account getrennt (05.11., Nicks gesperrter Account vorn): Region schlägt der nächste nach, Suche und Profile laufen weiter', async () => {
+  const { run, unipile, profileFetches } = await setup(
+    (_usage, prefs) => prefs.setOrder(['acc_nick', 'acc_scrape1', 'acc_scrape2']),
+    { acc_nick: 401 },
+    false,
+    { acc_nick: 401 },
+  );
+  const result = await run(4);
+  assert.equal(result.status, 'done', JSON.stringify(result.error));
+  const lookups = unipile.requests.filter((r) => r.path === '/api/v1/linkedin/search/parameters');
+  assert.equal(lookups[0].query.get('account_id'), 'acc_nick', 'erst der vordere');
+  assert.ok(lookups.some((r) => r.query.get('account_id') === 'acc_scrape1'), 'dann der nächste: ' + lookups.map((r) => r.query.get('account_id')).join(','));
+  assert.ok(!unipile.requests.some((r) => r.path === '/api/v1/linkedin/search' && r.query.get('account_id') === 'acc_nick'), 'Nick sucht nicht mehr');
+  assert.equal(profileFetches().filter((r) => r.query.get('account_id') !== 'acc_nick').length, 4);
 });

@@ -3,6 +3,53 @@
 > Nur der Frontend-Agent schreibt hier. Kurz halten, bei jedem Push aktualisieren, Erledigtes nach einer Woche löschen.
 
 ## Woran ich arbeite
+- **`claude/software-bug-check-5f2yyg` (10.11., Nutzer: „Software auf Bugs prüfen“, Backend + Frontend in einem)** –
+  `telemetry.trackCardOutcome` + `FocusView`: Wisch-Entscheidungen stehen als Ausgang der Karte im Nutzungs-Bericht
+  („Wischen rechts/links“ statt „ohne Aktion“). `LeadActions`: „Aus seit“ höchstens heute nach Ortszeit (nicht UTC).
+  E2E: `telemetry` (+1 Wischen); `accountSwitch` und `manualFlow` gegen Wettläufe gehärtet (Route nach Testende,
+  Kürzel A erst, wenn die Karte steht). **Hinweis:** Auf langsamen Rechnern wackeln noch `manualFlow:88` (drei Meldungen
+  gleichzeitig) und `linkedin:78` – je einmal in zwei Läufen, in der CI grün.
+- **`claude/keen-knuth-cmqdld` (09.11. i, Nutzer: Feedback vom Kunden)** – `components/feedback/`: `FeedbackHost` (in der
+  Hülle, ⌥F global, Bildschirmfoto per `modern-screenshot` ohne das Fenster selbst, Bilder ⌘V/Ziehen/Datei, ⌘↵, Danke +
+  „Deine letzten Meldungen“), `FeedbackButton` (`nav-feedback`, Desktop + Handy), `feedbackBus.openFeedback`. Auslöser
+  auch: Konto-Menü `menu-feedback`, Lead-Panel `lead-feedback-report`, Anzeigefehler `error-report`, Glocke (Ziel
+  `feedback`). `telemetry.recentTrail/recentErrors`. Neue Abhängigkeit `modern-screenshot`. E2E `feedback` (neu).
+- **`claude/keen-knuth-cmqdld` (09.11. g, Nutzer: „alles messen“)** – `src/lib/telemetry.ts`: Klicks auf `data-testid`,
+  Ansichten (`setView` in der Hülle), Karten im Stapel (`setCard` in `FocusView`), Kürzel (`useHotkeys`), Fehler
+  (window + ErrorBoundary), gescheiterte/langsame Anfragen (`onApiResult` in `leadSearchApi.ts`), Senden über
+  `telemetryApi.send` (keepalive). Start/Stopp mit der Hülle. **Neue Knöpfe brauchen ein `data-testid`.** E2E `telemetry` (neu).
+- **`claude/keen-knuth-cmqdld` (09.11. f, Nutzer: „5 im Chat, 1 Antwort in den Aufgaben“)** – Chats: „Wartet auf dich“
+  und der blaue Punkt nicht mehr bei Leads in `CLOSED_LEAD_STAGES` (Verloren/Übergeben) – wie die Antwort-Aufgaben.
+- **`claude/keen-knuth-cmqdld` (09.11., Nutzer, Backend + Frontend in einem)** – Dashboard → Lernen: Erklärsatz
+  `learning-explainer`, Wochenbalken mit Prozent/Datum/Anzahl („zu wenig“ unter `LEARNING_WEEK_MIN_RATED`), Hinweis
+  `learning-few-bad`, Profilabrufe je qualifiziertem Lead `learning-efficiency`, alte Suchanfragen grau `learning-stale`,
+  Knopf `learning-report-download` „Bericht für Claude (.md)“ (`learningApi.report`). KI-Kosten: `shadow` nur bei Kosten > 0,
+  fehlende Zwecke älterer Backends = 0. Einstellungen → KI-Bewertung: drei neue Felder. E2E `learning` (+1).
+- **`claude/awesome-curie-5jiqqt` (09.11., Nutzer)** – Lead-Karte: Knopf `connect-manual` „Manuell vernetzt“ (M, nur im
+  Sende-Modus) → `/events` `invite_sent` + `manual`. Follow-up-Karte: `followup-sent-elsewhere` „Follow-up getätigt (z. B.
+  Sticker auf LinkedIn)“ → `message_sent` mit `MESSAGE_WITHOUT_TEXT`. `cockpit.tsx`: `manual` geht nie über LinkedIn.
+  `ChatThread` zeigt Nachrichten ohne Text als Hinweis (`chat-without-text`). E2E `manualActions.spec.ts` (neu).
+- **`claude/awesome-curie-5jiqqt` (07.11. f, Nutzer)** – Vernetzen-Statistik mit Klartext: `Totals` je Zeitraum (Letzte n
+  Tage / Seit Beginn) – Gesendet, Quote gesamt, Quote von Hand, Quote Cockpit, jeweils „x von y angenommen“.
+- **`claude/awesome-curie-5jiqqt` (07.11. c, Nutzer)** – Dashboard → Vernetzen: je Tag nur noch „Angenommen“
+  (`acceptedOfDay`), „Annahmen am Tag“ raus; Zeile „Seit Beginn“ `invite-lifetime-*`. E2E `invites`.
+- **`claude/awesome-curie-5jiqqt` (07.11. b, Nutzer)** – Dashboard → Vernetzen → Überprüfung: „In den Tagesstapel“ je Lead
+  unter „Vernetzt, aber noch keine Nachricht“ (`audit-stack`, `audit-stack-all` für alle) – hebt „überspringen“ und eine
+  geplante Wiedervorlage auf (vorhandene Routen `DELETE /snooze`, `PATCH followUpPlan: null`), lädt den Stapel neu.
+  Aussortierte Kontakte ohne Lead: `audit-unknown-import` übernimmt sie. Kein Vertrag. E2E `invites` (+1).
+- **`claude/awesome-curie-5jiqqt` (07.11., Nutzer, Backend + Frontend in einem)** – `linkedInBlock`: Arbeitszeit-Hinweis
+  nur noch für Anfragen. Dashboard → Vernetzen: Spalten „davon angenommen“ (`acceptedOfDay`, passt zur Quote) und
+  „Annahmen am Tag“ (`accepted`) + Erklärsatz `invite-stats-note`. E2E `linkedin` (Text angepasst).
+- **`claude/beautiful-darwin-hyc38t` (05.11., Teammeeting, Backend + Frontend in einem)** – Startseite:
+  `InviteToday` (`invites-sent-today`, „Heute X von Y Vernetzungsanfragen · Z davon von Hand · noch N offen“, eingeplante).
+  Einstellungen → LinkedIn → Accounts: `InviteModePicker` je Gründer-Account (`linkedin-invite-mode-*`, „Nur von Hand“
+  mit Tagen `linkedin-manual-days`). Dashboard: Reiter „Vernetzen“ (`InviteSection`: Statistik je Gründer
+  `invite-stats-*`, Überprüfung `audit-start`/`audit-result`, neue Kontakte `new-contact` mit „Doch übernehmen“).
+  Lead-Panel: `panel-queued-invite` + „Zurücknehmen“. Automatische Suche: Feld `auto-random-minutes`.
+  E2E `invites.spec.ts` (neu), `autoSearch` (+1).
+- **`claude/zealous-newton-g95pqt` (03.11., Nutzer, Backend + Frontend in einem)** – Einstellungen → LinkedIn → Accounts:
+  Knopf `linkedin-disable` „Deaktivieren“/„Einschalten“ je Account (wirkt sofort, `linkedinApi.accountDisabled`),
+  deaktiviert: Zeile ausgegraut + `linkedin-disabled-note`. E2E `ohneShell`.
 - **`claude/firmenseiten-von-unten` (02.11., Nutzer, Backend + Frontend in einem)** – Einstellungen → LinkedIn → Accounts:
   Satz `linkedin-company-order` „Profile von oben nach unten, Firmenseiten von unten nach oben – nie über die Gründer“.
   Kein Vertrag. E2E `ohneShell`.

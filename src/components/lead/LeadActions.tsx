@@ -1,3 +1,4 @@
+import { openFeedback } from '../feedback/feedbackBus';
 import { ThumbsDown, ThumbsUp } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
@@ -552,7 +553,8 @@ function MetaAdsEditor({ lead, busy, onSave }: { lead: CockpitLead; busy: boolea
           <input
             type="date"
             value={lastStop}
-            max={new Date().toISOString().slice(0, 10)}
+            // Heute nach Ortszeit – mit UTC wäre kurz nach Mitternacht „heute“ noch gesperrt.
+            max={new Date().toLocaleDateString('sv-SE')}
             onChange={(event) => setLastStop(event.target.value)}
             className={FIELD_INPUT}
             data-testid="meta-ads-since"
@@ -874,6 +876,13 @@ export function MoreSheetContent({
           )}
         </SheetList>
       )}
+      <div className={cn(!readOnly && 'mt-3')}>
+        <SheetList>
+          <SheetItem onClick={() => openFeedback()} meta="Stimmt etwas nicht? Wir sehen, um welchen Lead es geht." testId="lead-feedback-report">
+            Feedback zu diesem Lead
+          </SheetItem>
+        </SheetList>
+      </div>
       {data.allowed && (
         <div className={cn(!readOnly && 'mt-3')}>
           <SheetList>

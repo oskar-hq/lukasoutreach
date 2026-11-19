@@ -136,6 +136,9 @@ export function valueOf(key: SettingKey, config: Config, env: Env): SettingValue
     case 'LINKEDIN_PAUSE_SECONDS': return `${config.linkedin.pauseMs[0] / 1000}-${config.linkedin.pauseMs[1] / 1000}`;
     case 'LINKEDIN_SYNC_MINUTES': return config.linkedin.syncMinutes;
     case 'ANTHROPIC_MODEL': return config.anthropic.model;
+    case 'ANTHROPIC_PRESCREEN_MODEL': return config.anthropic.prescreenModel;
+    case 'AI_SHADOW_MODEL': return config.anthropic.shadowModel;
+    case 'AI_SHADOW_PERCENT': return config.anthropic.shadowPercent;
     case 'META_GRAPH_VERSION': return config.meta.graphVersion;
     case 'ENRICHMENT_PROVIDER': return config.enrichmentProvider;
     case 'TREG_MAX_COST_USD': return config.treg.maxCostUsd;
