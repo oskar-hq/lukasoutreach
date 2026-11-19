@@ -308,6 +308,11 @@ export interface CockpitLead {
    * verteilen). Stufe bleibt bis zum Senden `new`; im Tagesstapel erscheint der Lead solange nicht. Fehlt/null = keine.
    */
   queuedInvite?: QueuedInvite | null;
+  /**
+   * Freie Felder (Lukas-Instanz 19.11., `shared/leadImport.ts`), z. B. { welle: "1", aufhaenger: "…" }. Stehen in `lead_detail`
+   * (MCP), damit Claude Platzhalter wie `{{aufhaenger}}` selbst füllt. Fehlt bzw. null = keine.
+   */
+  fields?: Record<string, string> | null;
 }
 
 /** Höchster Deal Value je Lead (ganze Euro). */
