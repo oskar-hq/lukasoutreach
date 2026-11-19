@@ -3,6 +3,7 @@ import type { AuthFounderId } from '../../../shared/auth.js';
 import { AUTO_SEARCH_ACTOR } from '../../../shared/autoSearch.js';
 import type { CompanyEnrichment } from '../../../shared/enrichment.js';
 import type { LeadLinkedInState } from '../../../shared/linkedin.js';
+import type { ContactVia, LeadAssessment, QueuedInvite } from '../../../shared/leads.js';
 import type { LeadConversation } from '../../../shared/messages.js';
 import type { LeadCrmState } from '../../../shared/crm.js';
 import { CATEGORY_LABELS, HIRING_ROLE_MAX_LENGTH, isQualifyingCategory, metaAdsLabel, type LeadCategory, type LeadHiring, type MetaAdsCheck, type NetworkDistance, type NewLeadCard } from '../../../shared/leadSearch.js';
@@ -150,6 +151,7 @@ interface LeadRow {
   reply_interest?: string | null;
   follow_up_plan?: string | null;
   follow_up_due?: number | null;
+  queued_invite?: string | null;
 }
 
 interface EventRow {
@@ -195,6 +197,7 @@ function toLead(row: LeadRow): CockpitLead {
     replyInterest: (row.reply_interest as ReplyInterest | null | undefined) ?? null,
     followUpPlan: row.follow_up_plan ? JSON.parse(row.follow_up_plan) : null,
     followUpDueAt: row.follow_up_due ?? null,
+    queuedInvite: row.queued_invite ? JSON.parse(row.queued_invite) : null,
   };
 }
 
@@ -330,7 +333,11 @@ export class LeadStore {
    */
   constructor(
     private readonly db: Database,
-    private readonly options: { ownerPool?: () => readonly AuthFounderId[] } = {},
+    private readonly options: {
+      ownerPool?: () => readonly AuthFounderId[];
+      /** Bei Verteilung (`ownerPool` mit zwei Gründern): alle neuen Leads an diesen – der andere vernetzt nur von Hand (05.11.). */
+      onlyOwner?: () => AuthFounderId | null;
+    } = {},
   ) {
     this.learning = new LearningStore(db);
   }
@@ -343,7 +350,7 @@ export class LeadStore {
     try {
       const changed = this.learning.syncOutcomes((row) => toLead(row as LeadRow), now);
       const save = this.db.prepare('UPDATE leads SET feedback = ? WHERE id = ?');
-      for (const { id, feedback } of changed) save.run(JSON.stringify(feedback), id);
+      for (const { id, feedback } of changed) save.run(feedback ? JSON.stringify(feedback) : null, id);
       return changed.length;
     } catch {
       return 0;
@@ -419,6 +426,10 @@ export class LeadStore {
     const unlinkEnrichment = this.db.prepare("UPDATE enrichment_requests SET lead_id = '' WHERE lead_id = ?");
     const forgetMessages = this.db.prepare('DELETE FROM linkedin_seen_messages WHERE lead_id = ?');
     const forgetChecked = this.db.prepare('DELETE FROM auto_search_checked WHERE provider_id = ?');
+    // 05.11.: eingeplante Anfrage weg, gesehene Anfrage ohne Namen (zählt weiter für die Grenzen), neuer Kontakt weg.
+    const forgetQueued = this.db.prepare('DELETE FROM linkedin_invite_queue WHERE lead_id = ?');
+    const anonymizeSent = this.db.prepare('UPDATE linkedin_sent_invites SET name = NULL, headline = NULL, lead_id = NULL WHERE lead_id = ?');
+    const forgetContact = this.db.prepare('DELETE FROM linkedin_new_contacts WHERE lead_id = ?');
     for (const lead of leads) {
       const group = randomUUID();
       const rows = events.all(lead.id, ...DASHBOARD_EVENT_KINDS) as { kind: string; at: number; by: string | null; label: string | null }[];
@@ -432,6 +443,9 @@ export class LeadStore {
       unlink.run(lead.id);
       unlinkEnrichment.run(lead.id);
       forgetMessages.run(lead.id);
+      forgetQueued.run(lead.id);
+      anonymizeSent.run(lead.id);
+      forgetContact.run(lead.id);
       // Rückmeldung zur Lead-Qualität gehört zum Lead (Beispiel für die KI, Bezug zur Suchanfrage) – mit ihm weg.
       this.learning.forget(lead.person.providerId);
       remove.run(lead.id);
@@ -816,6 +830,9 @@ export class LeadStore {
       const pool = this.options.ownerPool?.() ?? [];
       const backlog = pool.length >= 2 ? this.newBacklog() : {};
       const nextOwner = (): AuthFounderId => {
+        // Verteilt wird, aber einer vernetzt gerade nur von Hand (05.11.): alle neuen Leads an den anderen.
+        const only = this.options.onlyOwner?.() ?? null;
+        if (only) return only;
         if (pool.length < 2) return searcher;
         const order = pool.includes(searcher) ? [searcher, ...pool.filter((founder) => founder !== searcher)] : [...pool];
         // Erster mit dem kleinsten Rückstand – `order` entscheidet den Gleichstand.
@@ -954,7 +971,6 @@ export class LeadStore {
         lastActivityAt: now,
       };
       this.insertLead(lead);
-      // Nur „angelegt“ – kein `invite_accepted`, sonst zählte das Dashboard eine Annahme, die es nie gab.
       this.insertEvent({
         leadId: lead.id,
         kind: 'created',
@@ -965,8 +981,114 @@ export class LeadStore {
         text: contact.headline || null,
         label: null,
       });
+      // Feedback #1 (Johannes, 11.11.): Wer einen Link einträgt, hat sich auf LinkedIn selbst vernetzt (oder angefragt) –
+      // das soll als Vernetzung „von Hand“ zählen (Startseite, Dashboard → Vernetzen). Bis dahin nur „angelegt“.
+      if (stage !== 'new') {
+        this.insertEvent({ leadId: lead.id, kind: 'invite_sent', at: now, by: owner, actor, title: 'Vernetzungsanfrage gesendet · von Hand auf LinkedIn', text: null, label: null });
+      }
+      if (stage === 'connected') {
+        this.insertEvent({ leadId: lead.id, kind: 'invite_accepted', at: now, by: null, actor, title: 'Vernetzt · per LinkedIn-Link eingetragen', text: null, label: null });
+      }
       return { lead, created: true };
     });
+  }
+
+  /**
+   * Neuer LinkedIn-Kontakt, von selbst übernommen (Teammeeting 05.11., `shared/linkedin.ts` → Anfragen von Hand):
+   * Stufe „Vernetzt“, mit Profil-, Firmen- und KI-Daten wie bei der Lead-Suche. `manual_invite`: Anfrage von Hand auf
+   * LinkedIn gesehen → im Verlauf „Anfrage gesendet“ (Datum laut LinkedIn) und „angenommen“, damit Dashboard und
+   * Statistik sie zählen. `new_connection`: wer wen angefragt hat, ist unbekannt → nur „angelegt“.
+   * Gibt es die Person schon, bleibt alles, wie es ist (`created: false`).
+   */
+  createFromConnection(input: {
+    contact: ContactProfile;
+    owner: AuthFounderId;
+    via: ContactVia;
+    assessment: LeadAssessment | null;
+    company: { name: string; website: string | null; industry: string | null };
+    hiring: LeadHiring | null;
+    sentAt: number | null;
+    connectedAt: number | null;
+    now?: number;
+  }): { lead: CockpitLead; created: boolean } {
+    const now = input.now ?? Date.now();
+    const { contact, owner, via } = input;
+    return this.transaction(() => {
+      const existing = this.findExisting(contact);
+      if (existing) return { lead: existing, created: false };
+      const connectedAt = Math.min(input.connectedAt ?? now, now);
+      const sentAt = via === 'manual_invite' ? Math.min(input.sentAt ?? connectedAt, connectedAt) : null;
+      const lead: CockpitLead = {
+        id: randomUUID(),
+        owner,
+        stage: 'connected',
+        person: {
+          firstName: contact.firstName,
+          lastName: contact.lastName,
+          headline: contact.headline,
+          position: contact.position,
+          location: contact.location,
+          providerId: contact.providerId,
+          publicIdentifier: contact.publicIdentifier,
+          profileUrl: safeWebUrl(contact.profileUrl),
+          networkDistance: 1,
+        },
+        company: { name: input.company.name, website: safeWebUrl(input.company.website), industry: input.company.industry, region: contact.location },
+        assessment: input.assessment,
+        metaAds: null,
+        hiring: cleanHiring(input.hiring),
+        score: null,
+        enrichment: null,
+        linkedin: { sentBy: owner, invitationId: null, invitedAt: sentAt, chatId: null, chatStartedAt: null },
+        origin: { kind: 'contact', via },
+        template: null,
+        followUpsSent: 0,
+        nextStep: null,
+        createdAt: now,
+        updatedAt: now,
+        lastContactAt: sentAt,
+        lastReplyAt: null,
+        lastActivityAt: now,
+      };
+      lead.score = scoreOf(lead, now);
+      this.insertLead(lead);
+      this.db.prepare('UPDATE leads SET linkedin = ? WHERE id = ?').run(JSON.stringify(lead.linkedin), lead.id);
+      this.insertEvent({
+        leadId: lead.id,
+        kind: 'created',
+        at: now,
+        by: null,
+        actor: null,
+        title:
+          via === 'manual_invite'
+            ? 'Von Hand auf LinkedIn vernetzt – automatisch übernommen'
+            : 'Neuer LinkedIn-Kontakt – von der KI als passend eingestuft und übernommen',
+        text: contact.headline || null,
+        label: null,
+      });
+      if (sentAt !== null) {
+        this.insertEvent({ leadId: lead.id, kind: 'invite_sent', at: sentAt, by: owner, actor: null, title: 'Vernetzungsanfrage gesendet · von Hand auf LinkedIn', text: null, label: null });
+        this.insertEvent({ leadId: lead.id, kind: 'invite_accepted', at: connectedAt, by: null, actor: null, title: 'Vernetzungsanfrage angenommen · aus LinkedIn übernommen', text: null, label: null });
+      }
+      if (input.assessment) {
+        this.insertEvent({
+          leadId: lead.id,
+          kind: 'assessed',
+          at: now,
+          by: null,
+          title: `KI-Einschätzung: ${CATEGORY_LABELS[input.assessment.category]} · ${Math.round(input.assessment.confidence * 100)} %`,
+          text: input.assessment.reason,
+          label: null,
+        });
+      }
+      return { lead: this.get(lead.id)!, created: true };
+    });
+  }
+
+  /** Eingeplante Vernetzungsanfrage am Lead setzen bzw. löschen (null). Ändert die Stufe nicht. */
+  setQueuedInvite(id: string, queued: QueuedInvite | null, now = Date.now()): CockpitLead | null {
+    this.db.prepare('UPDATE leads SET queued_invite = ?, updated_at = ? WHERE id = ?').run(queued ? JSON.stringify(queued) : null, now, id);
+    return this.get(id);
   }
 
   /**
@@ -980,7 +1102,11 @@ export class LeadStore {
       const lead = this.get(id);
       if (!lead) throw new LeadNotFoundError();
       const sorted = messages.filter((message) => message.text.trim()).sort((a, b) => a.at - b.at);
-      if (lead.stage !== 'connected' || lead.lastContactAt !== null || !sorted.length) return lead;
+      // Nur ohne Nachrichten im Verlauf (eine von Hand angefragte Person hat schon `lastContactAt` = Anfrage, 05.11.).
+      const hasMessages = this.db
+        .prepare("SELECT 1 FROM lead_events WHERE lead_id = ? AND kind IN ('message_sent', 'message_received') LIMIT 1")
+        .get(id);
+      if (lead.stage !== 'connected' || hasMessages || !sorted.length) return lead;
       for (const message of sorted) {
         this.insertEvent({
           leadId: id,
@@ -997,7 +1123,7 @@ export class LeadStore {
       const stage: LeadStage = sorted.at(-1)!.fromLead ? 'replied' : 'contacted';
       this.db
         .prepare('UPDATE leads SET stage = ?, last_contact_at = ?, last_reply_at = ?, linkedin = ?, updated_at = ? WHERE id = ?')
-        .run(stage, lastOf(false), lastOf(true), JSON.stringify(state), now, id);
+        .run(stage, lastOf(false) ?? lead.lastContactAt, lastOf(true), JSON.stringify(state), now, id);
       return this.get(id)!;
     });
   }
@@ -1426,7 +1552,7 @@ export class LeadStore {
     const replied: string[] = [];
     const count = this.transaction(() => {
       // Simulation: auch die anonymen Zahlen gelöschter Demo-Leads, sonst zählte das Dashboard sie doppelt.
-      this.db.exec('DELETE FROM leads; DELETE FROM lead_events_archive;');
+      this.db.exec('DELETE FROM leads; DELETE FROM lead_events_archive; DELETE FROM linkedin_invite_queue;');
       this.learning.reset();
       for (const seed of DEMO_SEED) {
         const times = seed.events.map((event) => now + event.offsetMs);

@@ -3,6 +3,129 @@
 > Nur der Backend-Agent schreibt hier. Kurz halten, bei jedem Push aktualisieren, Erledigtes nach einer Woche löschen.
 
 ## Woran ich arbeite
+- **`claude/software-bug-check-5f2yyg` (11.11., Feedback #1 von Johannes)** – Kontakt per LinkedIn-Link zählt als
+  Vernetzung von Hand: `createContact` schreibt bei „Anfrage gesendet“ `invite_sent` (von Hand), bei „Vernetzt“
+  zusätzlich `invite_accepted`; `ConnectionStore.recordContactInvite` merkt die Anfrage als `logged` (mit Annahme).
+  **Bewusst geändert:** Bis dahin nur „angelegt“, damit keine Annahme zählt, die es nie gab – jetzt Wunsch des Nutzers.
+  Test `contact`. **12.11.:** Migration 55 trägt das für vorher per Link eingetragene Kontakte nach (Zeitpunkt des
+  Eintragens, nur ohne vorhandenes `invite_sent`).
+- **`claude/software-bug-check-5f2yyg` (10.11., Nutzer: „Software auf Bugs prüfen“, Backend + Frontend in einem)** –
+  Befunde aus Live-Daten (MCP) + Code. Kein Vertrag geändert.
+  - **Automatische Suche:** Folgeläufe fürs Tagesziel überstehen einen Neustart (Migration 54
+    `auto_search_state.follow_up`, `AutoSearchStore.followUp/setFollowUp`, Planer `resumeFollowUp`/`queueFollowUp`).
+    Vorher: jedes Update in der Pause beendete die Suche des Tages still (10.11.: 1 Lauf, 4 statt 40 Leads). **Für alle
+    Agents:** Ein Update zwischen zwei Läufen ist damit unkritisch; *während* eines Laufs lehnt der Server es weiter ab.
+  - **Neue Kontakte:** ein Anstoß je Abgleich (vorher zwei), nach Stopp (Limit, Zugang, KI) ruht die Übernahme
+    30 Min. bzw. bis kurz nach Mitternacht (`NewContactImporter.resting()`, `IMPORT_REST_MS`); 404 „Attendee not
+    found“ beim Chat-Import = keine Unterhaltung, keine Warnung.
+  - **Jobs messen:** `trackJob(name, work, failure?)` – Abgleich, neue Kontakte und Aufwärmen fangen ihre Fehler selbst
+    und zählten immer als gelungen; jetzt „gescheitert“ mit Grund. SSE-Route des Laufs wird nicht mehr als API-Dauer
+    gemessen (`STREAM_ROUTES`). **Neue Jobs, die Fehler selbst fangen: `failure` mitgeben.**
+  - **MCP `todays_tasks`:** „Braucht Aufmerksamkeit“ gekürzt (Anzahl je Grund, 15 älteste, `attention_limit`,
+    `attention_offset`) – 433 Einträge waren 74.712 Zeichen.
+  - **Aufwärmen:** Account-Fehler (alle Personen einer Runde 404, keine Unipile-Sitzung) pausieren den Account statt
+    Personen als „übersprungen“ zu verbrauchen (`WARMUP_NOT_FOUND_REASON`).
+  - **Zeitumstellung:** `localDayStart`/`nextLocalMidnight`/`secondsUntilMidnight` stimmen auch an Tagen mit 23/25 h.
+  - Tests: `autoSearch` (+3), `inviteFlow` (+2), `telemetry`, `mcp` (+1), `warmup` (+2), `tasks` (+1);
+    `fakeServers`: `unknownAttendees`, `inviteFailByAccount`.
+  - **Offen für den Nutzer (keine Code-Sache):** In `UNIPILE_WARMUP_ACCOUNTS` steht `3H0VX8nfS0a00hNCV2KG1w`, den
+    Unipile nicht mehr als Account listet; der Aufwärm-Account `4QfelBlZSxWieswg0VYXDQ` ist bei Unipile getrennt (401).
+    Hauptmodell der Einstufung steht seit 09.11. auf Haiku – Quote qualifiziert je Profil am 10.11. ~12 % (vorher ~25 %),
+    Modellvergleich erst 13 Fälle.
+- **`claude/keen-knuth-cmqdld` (09.11. i, Nutzer: Feedback vom Kunden)** – Vertrag `shared/feedback.ts` (neu),
+  `NotificationKind 'feedback'`, `NotificationTarget { view: 'feedback' }`. Migration 53 `feedback`, `feedback/store.ts`
+  (Bilder unter `DATA_DIR/feedback/<id>/`), `feedback/routes.ts` (POST mit 16 MB, Glocke/Slack, PATCH → Glocke des
+  Melders). MCP `submit_feedback`, `list_feedback`, `feedback_detail` (mit Bildern), `update_feedback`. Test `mcp`.
+- **`claude/keen-knuth-cmqdld` (09.11. h, Nutzer)** – MCP `system_status`, `notifications`, `server_logs`
+  (`mcp/systemTools.ts`). Neu: `GET /api/telemetry/health` (Verbrauch heute, KI 24 h, Jobs, Läufe, Fehlerzähler),
+  `GET /api/telemetry/logs` (Migration 52 `server_logs`, pino-Hook `captureLog` in `app.ts`, `redact`). Lesen unter
+  `/api/telemetry/*` nur Gründer/Admin (`roleDenial`). Tests `mcp`, `telemetry`.
+- **`claude/keen-knuth-cmqdld` (09.11. g, Nutzer: „alles messen“)** – Vertrag `shared/telemetry.ts` (neu). Migration 51
+  `ui_events`/`api_metrics`/`job_runs`; `telemetry/routes.ts` (onResponse misst jede `/api/*`-Route, `POST /events`,
+  `GET /report`), `telemetry/store.ts` (`trackJob`, `noteJob`, Bericht). Jobs: `linkedin_abgleich`,
+  `eingeplante_anfragen`, `neue_kontakte`, `aufwaermen`, `sicherung`. MCP `usage_report`. Tests `telemetry` (neu), `mcp`.
+- **`claude/keen-knuth-cmqdld` (09.11. e, Nutzer)** – MCP-Tool `optimization_report` (`days`, `sections` = nur passende
+  `##`-Abschnitte, `filterReport` in `mcp/tools.ts`) liefert den Bericht aus `/api/learning/report`. Test `mcp`.
+- **`claude/keen-knuth-cmqdld` (09.11. d, Nutzer)** – MCP-Tool `start_update` (`mcp/settingsTools.ts`): prüft bei GitHub
+  (`POST /api/system/update/check`) und startet das Update (`POST /api/system/update`) – Rechte wie der Knopf. Test `mcp`.
+- **`claude/keen-knuth-cmqdld` (09.11. c, Bericht des Nutzers: 454 Profilabrufe am 08.11. ohne Lead-Suche)** – Neue Kontakte:
+  Profil + Firmenseite werden am Kontakt gemerkt (Migration 50 `linkedin_new_contacts.enriched`, `enrichOnce`). Vorher las
+  jeder Versuch nach einem Fehler hinter dem Abruf (KI weg, Guthaben, Anthropic-Limit – zählt nicht als Versuch) beim
+  nächsten Abgleich alle 3 min erneut über LinkedIn. Test `inviteFlow` (+1, ohne Fix 4 Abrufe statt 1).
+- **`claude/keen-knuth-cmqdld` (09.11. b, Nutzer: „alle Accounts voll, 0 gefunden“)** – Migration 49: `linkedin_usage_log`
+  (Abrufe je Tag/Account/Zweck, 120 Tage; `AccountUsage.add(…, source?)`, Live-Adapter unterscheidet Lead-Suche und
+  neue Kontakte über `CONTACT_RUN_PREFIX`, Aufwärmen `warmup`), `search_runs` + `founder`/`keywords`/`positions`/
+  `error_message` (`start(…, { founder })` vom Planer und von Hand). Bericht: Läufe auch ohne KI-Kosten, Gründer,
+  Suchbegriffe, Fehler; „Automatische Suche je Tag und Gründer“; „Wohin die LinkedIn-Abrufe gingen“. Kein Vertrag.
+  Test `insights` (neu), `liveAdapter` angepasst.
+- **`claude/keen-knuth-cmqdld` (09.11., Nutzer: „mehr tracken, KI günstiger, Lernen verständlich“, Backend + Frontend in
+  einem)** – Vertrag additiv (`contract:`-Commit): `GET /api/learning/report?days=` (Markdown-Download, `learning/insights.ts`),
+  `LearningSummary.efficiency?`, `LearningQuery.lastSearchedAt?/stale?` (Top-Anfragen: aktuelle vor alten),
+  `AiPurpose 'shadow'`, Einstellungen `ANTHROPIC_PRESCREEN_MODEL` (Standard Haiku 5.5), `AI_SHADOW_MODEL`, `AI_SHADOW_PERCENT`
+  (Standard 10). Migration 48: `search_runs`, `search_decisions` (je Treffer, ohne Namen, 120 Tage), `ai_shadow`.
+  Runner-Option `insights` (nach jedem Lauf, auch Simulation), `start(…, { auto })` vom Planer. Lernen: Leads aus der
+  Suche ohne Kontakt auf „Verloren“ → automatisch „passt nicht“ (wieder geöffnet → weg). Mock: Modellvergleich ohne
+  Kosten, Trichter unverändert. Tests `liveAdapter` (+1, angepasst), `learning` (+2), `aiCost` (angepasst); Live-Tests
+  mit `AI_SHADOW_PERCENT: '0'`.
+- **`claude/awesome-curie-5jiqqt` (09.11., Nutzer, Backend + Frontend in einem)** – Vertrag additiv: `LeadActionRequest.manual?`,
+  `MESSAGE_WITHOUT_TEXT` (`shared/leads.ts`). `POST /events` mit `invite_sent` + `manual` → Titel „von Hand auf LinkedIn“ und
+  `linkedin_sent_invites.source = 'logged'` (`recordManualInvite`; zählt als von Hand, auch vor Beobachtungsbeginn –
+  `TRACKED_MANUAL`, Limits und Zähler kennen `logged`). Chat-Import: eigene Nachricht ohne `text` → `MESSAGE_WITHOUT_TEXT`
+  (`chatMessage` in `service.ts`), von Hand eingetragene ohne Text werden bis 12 h daneben nicht doppelt übernommen.
+  Nur das dokumentierte Feld `text` – Sticker/Anhang unterscheidet das Cockpit nicht. Tests `chatSync` (+1), `inviteFlow` (+1).
+- **`claude/awesome-curie-5jiqqt` (07.11. f, Nutzer)** – „Von Hand“ zählt erst ab Beobachtungsbeginn (`TRACKED_MANUAL` in
+  `connections.ts`, Marke `sent:<Gründer>`): beim ersten Abgleich schon offene Anfragen (mit oder ohne Datum) nie als von Hand –
+  gilt für Statistik, Seit Beginn und „wer hat angenommen?“. Test `inviteFlow`.
+- **`claude/awesome-curie-5jiqqt` (07.11. e, Nutzer „4 verschiedene Werte“)** – `lifetime` zählt Anfragen von Hand ohne
+  Datum (`sent_at = 0`, beim ersten Abgleich schon offen) nicht mehr mit; die drückten die Quote „von Hand“. Test `inviteFlow`.
+- **`claude/awesome-curie-5jiqqt` (07.11. c, Nutzer „lifetime“)** – Vertrag additiv: `LinkedInInviteStatsFounder.lifetime?`
+  (`LinkedInInviteTotals`: Anfragen seit Beginn, davon angenommen, Quoten von Hand/Cockpit). Test `inviteFlow` (+Prüfungen).
+- **`claude/awesome-curie-5jiqqt` (07.11., Nutzer, Backend + Frontend in einem)** – Arbeitszeit gilt nur noch für
+  Vernetzungsanfragen: `checkBeforeSend` prüft sie nur bei `kind === 'invite'`, Nachrichten gehen jederzeit raus.
+  Vertrag additiv: `LinkedInInviteStatsDay.acceptedOfDay?` (von den an dem Tag gesendeten Anfragen angenommen, Summe =
+  `acceptedOfSent`); Anfragen von Hand ohne Lead zählen jetzt auch bei `accepted` (Tag der Annahme). Tests `linkedin`
+  (+1), `inviteFlow` (+1 Prüfung).
+- **`claude/beautiful-darwin-hyc38t` (06.11. b, Nutzer)** – Vertrag additiv: `GET /api/linkedin/manual-invites`
+  (`LinkedInManualInvite*`). Dashboard zählt Anfragen von Hand ohne Lead als Anfrage/Annahme mit. Liegen gebliebene neue
+  Kontakte (`pending`) werden bei jedem Abgleich erneut übernommen. Pause wegen abgelehntem Zugang endet von selbst,
+  sobald der Abgleich über den Account wieder geht (Limit-Pausen bleiben). Frontend: Knopf „Von Hand angefragt – wer hat
+  angenommen?“ je Gründer unter Dashboard → Vernetzen. Tests `inviteFlow` (+2).
+- **`claude/beautiful-darwin-hyc38t` (06.11., Nutzer: „die einzelnen Läufe verteilen“)** – `randomMinutes` gilt jetzt auch
+  für die Pause vor jedem Folgelauf fürs Tagesziel: `followUpPauseMinutes` zufällig 5…n Minuten (vorher fest 5).
+  Vertrag nur Doku (`shared/autoSearch.ts`), Frontend-Beschriftung „(Start und Pausen)“. Test `autoSearch` (+1).
+- **`claude/beautiful-darwin-hyc38t` (05.11. b, Nutzer nach dem Update)** – ① „Nur von Hand“: keine Karten „Neuer Lead“
+  für diesen Gründer (`TaskRules.manualInvites`, seine Leads füllen unter „Alle“ höchstens freie Plätze des anderen),
+  Verteilung (`LEAD_DISTRIBUTION=balanced`) gibt neue Leads nur dem anderen (`LeadStore` Option `onlyOwner`).
+  ② Ein ausgefallener Account reißt die Suche nicht mehr mit: Region nachschlagen weicht aus (`lookupParameters`,
+  vorher immer `search[0]`), Zugang abgelehnt/keine Sitzung beim Dubletten-Abgleich = wie „getrennt“ (weiter, Doppelte
+  in Kauf; vorher alle neuen Leads zurückgestellt), fehlgeschlagener Lauf (`auth`/`provider`/`network`) → bis zu 2 neue
+  Versuche nach 30 min (`AUTO_SEARCH_FAILED_RETRIES`). ③ Überprüfung live höchstens einmal pro Stunde (429).
+  Tests: `accountLimits` (+1), `autoSearch` (+2), `founderNetworks` (angepasst + 1), `inviteFlow` (+1). Fake: `failParameters`.
+- **`claude/beautiful-darwin-hyc38t` (05.11., Teammeeting „menschlicher arbeiten“, Backend + Frontend in einem)** –
+  **Vertrag (additiv, Commit `contract:`):** `LinkedInInviteMode` (`spread`/`instant`/`manual`) + Route
+  `PUT /api/linkedin/accounts/:id/invite-mode`, `LinkedInAccountStatus.inviteMode/manualUntil/invitesSentToday/
+  manualInvitesToday/queuedInvites/nextQueuedAt/invitesCheckedAt`, `CockpitLead.queuedInvite`, `DELETE
+  /api/leads/:id/linkedin/invite`, `LeadOrigin contact.via`, `LinkedInNewContact` + `/api/linkedin/new-contacts(/:id/import)`,
+  `LinkedInAudit*` + `GET/POST /api/linkedin/audit`, `LinkedInInviteStats*` + `GET /api/linkedin/invite-stats`,
+  `AutoSearch*.randomMinutes`, Fehlercode `linkedin_manual`. **Backend:** Migration 47. `LINKEDIN_INVITE_MODE`
+  (Standard `spread`): Klick plant ein (`linkedin_invite_queue`), `processQueue` jede Minute (nur live, Arbeitszeit,
+  ≥ 6 min Abstand, Tagesgrenze, überfällig > 30 min → neu planen). `manual`: 409 `linkedin_manual`, nie Ausweich-Account.
+  `linkedin/connections.ts`: Abgleich liest `invite/sent` (Felder laut `unipile-node-sdk`: `parsed_datetime`,
+  `invited_user*`), neue „von Hand“ zählen in `guard.invitesSince` (also gegen die Grenze); beim ersten Lesen zählen
+  Anfragen ohne Datum nicht als heute. Neue Kontakte (Relations ab Beobachtungsbeginn) ohne Lead →
+  `NewContactImporter` (Profil + Firmenseite über `adapter.enrich`, KI `qualify`; von Hand angefragt immer, sonst nur
+  qualifiziert; nie während einer Lead-Suche), `leads.createFromConnection` + Chat-Import. `linkedin/audit.ts`:
+  Überprüfung (Relations der letzten n Tage) + Statistik. Auto-Suche: `dueSlotRandom/nextRunAtRandom` (fest je Tag).
+  MCP `send_connection_request` meldet „eingeplant“. Tests `inviteFlow.test.ts` (8), bestehende Sende-Tests mit
+  `LINKEDIN_INVITE_MODE=instant`.
+- **`claude/zealous-newton-g95pqt` (03.11., Nutzer: „Account mit einem Klick ausschließen statt alles auf 0“, Backend +
+  Frontend in einem)** – **Vertrag (additiv):** `LinkedInUnipileAccount.disabled?`, `LinkedInAccountDisabledRequest`,
+  Route `PUT /api/linkedin/accounts/:id/disabled` `{ disabled }`. Migration 46 (`linkedin_account_prefs.disabled`).
+  `AccountPrefsStore.isDisabled/setDisabled`. Wirkung: Live-Adapter filtert deaktivierte aus dem Such-Pool (Suche,
+  Profile, Firmenseiten, Regionssuche; alle aus → `config` „Alle LinkedIn-Accounts deaktiviert“), Aufwärmen
+  `limitToday` 0, Service: Senden/Test/Kontakt-Lookup 409 `linkedin_no_account` „… ist deaktiviert“, Anfragen-Ausweich
+  nie auf deaktivierten Account, Abgleich + Chat-Abgleich überspringen ihn (Hinweis in `problems`), Kontaktliste eines deaktivierten Gründers wird beim Dubletten-Abgleich nicht geladen (wie „getrennt“). MCP
+  `change_account_limits` kann `disabled`. Tests `accountLimits.test.ts` (3 neu), `warmup.test.ts` (1 neu).
 - **`claude/firmenseiten-von-unten` (02.11., Nutzer: „Unipile zeigt nur 50 Profile über die Main Accounts“, Backend +
   Frontend in einem)** – Ursache: Firmenseite zählt ins Profil-Limit, bei 90 also ~45 Personen. Neu `companyAccount()` im
   Live-Adapter: Firmenseiten **nie über Gründer-Accounts**, sondern von **unten** in der Such-Reihenfolge (am wenigsten
@@ -521,6 +644,8 @@
   Lead stabil.
 
 ## Vertragsänderungen (`shared/`, HTTP-API)
+- **05.11. `claude/beautiful-darwin-hyc38t`** – additiv (siehe „Woran ich arbeite“): Anfragen-Modus je Account,
+  eingeplante Anfragen, neue Kontakte, Überprüfung, Statistik, `randomMinutes`, `linkedin_manual`. Kein Bruch.
 - **31.10. (Wunsch des Nutzers, Entfernung):** `SettingKey 'AUTO_SEARCH_PROFILES_PER_DAY'` und
   `AUTO_SEARCH_PROFILES_PER_DAY_DEFAULT` entfernt. `AutoSearchToday.profilesPerDay` bleibt optional im Typ, wird aber
   nicht mehr geschickt → „x von y Profilabrufen“ fällt im Frontend von selbst weg. Minimaler Frontend-Fix (Ausnahme 1):

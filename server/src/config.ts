@@ -7,6 +7,13 @@ import { AUTO_QUALIFY_DEFAULT_TERMS } from '../../shared/settings.js';
 
 /** Standardmodell für die Qualifizierung – über ANTHROPIC_MODEL änderbar. */
 export const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-5-5';
+/**
+ * Vorprüfung (nur Headlines) und Vergleichsmodell (Wunsch des Nutzers 09.11.): ein kleines Modell reicht meist –
+ * über ANTHROPIC_PRESCREEN_MODEL bzw. AI_SHADOW_MODEL änderbar.
+ */
+export const DEFAULT_PRESCREEN_MODEL = 'claude-haiku-5-5';
+export const DEFAULT_SHADOW_MODEL = 'claude-haiku-5-5';
+export const DEFAULT_SHADOW_PERCENT = 10;
 /** Aktuelle Graph-API-Version für die Meta-Werbebibliothek (laut offiziellem Meta-Business-SDK) – über META_GRAPH_VERSION änderbar. */
 export const DEFAULT_META_GRAPH_VERSION = 'v26.0';
 
@@ -38,7 +45,16 @@ export interface Config {
   };
   anthropic: {
     apiKey: string | null;
+    /** Einstufung der Profile (und Standard für Textvorschläge, Antworten, Assistent). */
     model: string;
+    /** Vorprüfung der Suchtreffer anhand der Headline (`ANTHROPIC_PRESCREEN_MODEL`). */
+    prescreenModel: string;
+    /**
+     * Modellvergleich (`AI_SHADOW_MODEL`, `AI_SHADOW_PERCENT`): so viel Prozent der Einstufungen gehen zusätzlich an
+     * `shadowModel`, so viel Prozent der Vorprüfungen zusätzlich an `model`. 0 = aus. Das Ergebnis zählt nie.
+     */
+    shadowModel: string;
+    shadowPercent: number;
     /** Kurs Dollar → Euro für die KI-Kosten im Dashboard (`AI_USD_EUR_RATE`, Standard 0,86). */
     usdToEur: number;
   };
@@ -102,6 +118,11 @@ export interface Config {
     invitesPerDay: number;
     /** `LINKEDIN_ACCOUNT_FALLBACK`: Anfragen über den Account des anderen Gründers, wenn der eigene voll ist. */
     accountFallback: boolean;
+    /**
+     * `LINKEDIN_INVITE_MODE` (05.11.): wie Anfragen über Gründer-Accounts ohne eigene Wahl rausgehen – `spread` (Standard,
+     * über den Tag verteilt), `instant` (sofort) oder `manual` (nur von Hand). Je Account änderbar unter Einstellungen.
+     */
+    inviteMode: 'spread' | 'instant' | 'manual';
     invitesPerWeek: number;
     messagesPerDay: number;
     workHours: { fromHour: number; toHour: number; days: number[]; timeZone: string };
@@ -315,6 +336,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     anthropic: {
       apiKey: text(env.ANTHROPIC_API_KEY),
       model: text(env.ANTHROPIC_MODEL) ?? DEFAULT_ANTHROPIC_MODEL,
+      prescreenModel: text(env.ANTHROPIC_PRESCREEN_MODEL) ?? DEFAULT_PRESCREEN_MODEL,
+      shadowModel: text(env.AI_SHADOW_MODEL) ?? DEFAULT_SHADOW_MODEL,
+      shadowPercent: Math.min(100, Math.max(0, Math.round(number(env.AI_SHADOW_PERCENT, DEFAULT_SHADOW_PERCENT)))),
       usdToEur: (() => {
         const value = number(env.AI_USD_EUR_RATE, 0.86);
         if (value <= 0 || value > 10) throw new Error(`AI_USD_EUR_RATE muss größer 0 und höchstens 10 sein (ist: "${env.AI_USD_EUR_RATE}").`);
@@ -379,6 +403,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         invitesPerDay: Math.min(UNIPILE_LIMITS.invitesPerDay, Math.max(0, Math.floor(number(env.LINKEDIN_INVITES_PER_DAY, 20)))),
         // Wunsch des Nutzers 12.10.: eigener Account voll → über den des anderen Gründers weiter (Standard an).
         accountFallback: (text(env.LINKEDIN_ACCOUNT_FALLBACK) ?? 'on').toLowerCase() !== 'off',
+        inviteMode: ((mode) => (mode === 'instant' || mode === 'manual' ? mode : 'spread'))((text(env.LINKEDIN_INVITE_MODE) ?? 'spread').toLowerCase()),
         invitesPerWeek: Math.min(UNIPILE_LIMITS.invitesPerWeek, Math.max(0, Math.floor(number(env.LINKEDIN_INVITES_PER_WEEK, 80)))),
         messagesPerDay: Math.min(UNIPILE_LIMITS.messagesPerDay, Math.max(0, Math.floor(number(env.LINKEDIN_MESSAGES_PER_DAY, 40)))),
         workHours: {

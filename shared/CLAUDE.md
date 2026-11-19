@@ -1,6 +1,6 @@
 # Vertrag zwischen Frontend und Backend
 
-`leadSearch.ts` (Lead-Suche), `auth.ts` (Anmeldung), `leads.ts` (Leads/Pipeline), `scoring.ts` (Lead-Score), `tasks.ts` (Tagesstapel), `enrichment.ts` (Clay), `settings.ts` (Einstellungen), `linkedin.ts` (LinkedIn-Aktionen), `dashboard.ts` (Kennzahlen), `messages.ts` (Vorlagen, KI-Vorschläge), `autoSearch.ts` (automatische Lead-Suche), `learning.ts` (Lernen aus Lead-Qualität), `crm.ts` (Übergabe an Close), `system.ts` (Sicherungen, Updates), `assistant.ts` (KI-Assistent), `mcp.ts` (MCP-Server für die Claude-App) und `notifications.ts` (Neuigkeiten) werden von **beiden** Seiten
+`leadSearch.ts` (Lead-Suche), `auth.ts` (Anmeldung), `leads.ts` (Leads/Pipeline), `scoring.ts` (Lead-Score), `tasks.ts` (Tagesstapel), `enrichment.ts` (Clay), `settings.ts` (Einstellungen), `linkedin.ts` (LinkedIn-Aktionen), `dashboard.ts` (Kennzahlen), `messages.ts` (Vorlagen, KI-Vorschläge), `autoSearch.ts` (automatische Lead-Suche), `learning.ts` (Lernen aus Lead-Qualität), `crm.ts` (Übergabe an Close), `system.ts` (Sicherungen, Updates), `assistant.ts` (KI-Assistent), `mcp.ts` (MCP-Server für die Claude-App), `notifications.ts` (Neuigkeiten) `telemetry.ts` (Nutzungsdaten) und `feedback.ts` (Feedback vom Kunden) werden von **beiden** Seiten
 importiert (Vite und Node) – Änderungen hier treffen immer beide Agents.
 
 - Ohne Imports und ohne Laufzeit-Abhängigkeiten halten (nur Typen, Konstanten, kleine reine Funktionen). Ausnahme:

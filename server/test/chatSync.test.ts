@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { NewLeadCard } from '../../shared/leadSearch.js';
-import type { CockpitLead, CreateLeadsResponse, LeadDetailResponse } from '../../shared/leads.js';
+import { MESSAGE_WITHOUT_TEXT, type CockpitLead, type CreateLeadsResponse, type LeadDetailResponse } from '../../shared/leads.js';
 import type { ChatSyncStatus } from '../../shared/linkedin.js';
 import { MockAdapter } from '../src/adapters/mock/mockAdapter.js';
 import { buildApp } from '../src/app.js';
@@ -222,4 +222,40 @@ test('Automatischer Abgleich: eigene Nachricht bei offener Anfrage setzt nicht �
   detail = (await server.inject({ method: 'GET', url: `/api/leads/${lead.id}` })).json() as LeadDetailResponse;
   assert.equal(detail.events.filter((event) => event.kind === 'invite_accepted').length, 1);
   assert.deepEqual(detail.events.filter((event) => event.kind === 'message_sent').map((event) => event.text), ['Hallo Vorname1, gern vernetzen']);
+});
+
+test('Sticker (09.11.): eigene Nachricht ohne Text kommt als Hinweis in den Verlauf, von Hand eingetragen nicht doppelt', async (t) => {
+  const unipile = await startFakeUnipile({ accounts: [{ object: 'Account', type: 'LINKEDIN', id: 'acc_nick', name: 'Nick', sources: [{ id: 's1', status: 'OK' }] }] });
+  t.after(() => unipile.close());
+  const server = app({ ...LIVE, UNIPILE_DSN: unipile.baseUrl });
+  const created = (await server.inject({ method: 'POST', url: '/api/leads', payload: { cards: [card(1)], owner: 'nick' } })).json() as CreateLeadsResponse;
+  const [a] = created.created as CockpitLead[];
+  const hour = 60 * 60 * 1000;
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const now = Date.now();
+  await act(server, a.id, { action: 'invite_sent', at: now - 30 * hour });
+  await act(server, a.id, { action: 'invite_accepted', at: now - 29 * hour });
+  await act(server, a.id, { action: 'message_sent', text: 'Hallo A!', at: now - 28 * hour });
+  // Follow-up als Sticker – im Cockpit über „Follow-up schon gesendet (Sticker)“ eingetragen.
+  const logged = await act(server, a.id, { action: 'message_sent', text: MESSAGE_WITHOUT_TEXT, manual: true, at: now - 3 * hour });
+  assert.equal(logged.followUpsSent, 1, 'zählt als Follow-up');
+  unipile.linkedin.attendeeChats.ACoTEST1 = [{ id: 'chat-a', account_id: 'acc_nick', timestamp: iso(now - hour) }];
+  const noText = null as unknown as string;
+  unipile.linkedin.messages['chat-a'] = [
+    { id: 'a1', text: 'Hallo A!', is_sender: 1, timestamp: iso(now - 28 * hour), sender_id: 'me' },
+    // Der eingetragene Sticker – nicht doppelt.
+    { id: 's1', text: noText, is_sender: 1, timestamp: iso(now - 3 * hour + 60_000), sender_id: 'me' },
+    // Ein zweiter, nicht eingetragen – kommt dazu.
+    { id: 's2', text: '', is_sender: 1, timestamp: iso(now - hour), sender_id: 'me' },
+    // Ohne Text vom Lead (z. B. Reaktion): ausgelassen.
+    { id: 'r1', text: noText, is_sender: 0, timestamp: iso(now - 30 * 60_000), sender_id: 'ACoTEST1' },
+  ];
+  await runSync(server);
+  const detail = (await server.inject({ method: 'GET', url: `/api/leads/${a.id}` })).json() as LeadDetailResponse;
+  const withoutText = detail.events.filter((event) => event.kind === 'message_sent' && event.text === MESSAGE_WITHOUT_TEXT);
+  assert.equal(withoutText.length, 2);
+  assert.match(withoutText[1].title, /aus LinkedIn übernommen/);
+  assert.ok(!detail.events.some((event) => event.kind === 'message_received'));
+  assert.equal(detail.lead.followUpsSent, 2);
+  assert.equal(detail.lead.stage, 'contacted');
 });

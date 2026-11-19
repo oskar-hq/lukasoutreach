@@ -226,3 +226,10 @@ test('Live ohne Anthropic-Schlüssel: verständliche Fehlermeldung im Stream, An
   const detail = (await server.inject({ method: 'GET', url: `/api/assistant/chats/${chat.id}` })).json() as AssistantChatDetail;
   assert.equal(detail.messages[1].failed, true);
 });
+
+test('Uhrzeit des Sendens (16.11.): Stunde in deutscher Zeit als Zahl – nicht alles „ab 18 Uhr“', async () => {
+  const { berlinHour } = await import('../src/assistant/data.js');
+  assert.equal(berlinHour(Date.UTC(2026, 10, 16, 15, 30)), 16, 'Winterzeit: 15:30 UTC = 16:30');
+  assert.equal(berlinHour(Date.UTC(2026, 6, 1, 7, 0)), 9, 'Sommerzeit: 07:00 UTC = 09:00');
+  assert.equal(berlinHour(Date.UTC(2026, 10, 16, 23, 10)), 0);
+});

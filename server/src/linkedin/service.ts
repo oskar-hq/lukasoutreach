@@ -1,24 +1,28 @@
+import { trackJob } from '../telemetry/store.js';
 import { randomUUID } from 'node:crypto';
 import type { FastifyBaseLogger } from 'fastify';
 import { AUTH_FOUNDER_IDS, defaultFounderName, type AuthFounderId } from '../../../shared/auth.js';
-import type { CockpitLead, LeadAction, LeadStage } from '../../../shared/leads.js';
-import type {
-  LeadLinkedInState,
-  LinkedInActionsMode,
-  ChatSyncStatus,
-  LinkedInErrorCode,
-  LinkedInStatusResponse,
-  LinkedInSyncResponse,
-  LinkedInTestProfile,
-  LinkedInUnipileAccount,
+import { MESSAGE_WITHOUT_TEXT, type CockpitLead, type LeadAction, type LeadStage } from '../../../shared/leads.js';
+import {
+  INVITE_SPREAD_MIN_GAP_MINUTES,
+  type LeadLinkedInState,
+  type LinkedInActionsMode,
+  type LinkedInInviteMode,
+  type ChatSyncStatus,
+  type LinkedInErrorCode,
+  type LinkedInStatusResponse,
+  type LinkedInSyncResponse,
+  type LinkedInTestProfile,
+  type LinkedInUnipileAccount,
 } from '../../../shared/linkedin.js';
-import { UNIPILE_SESSION_DOWN_TEXT, UnipileClient, UnipileHttpError, UnipileNetworkError, isUnipileSessionDown, type UnipileAccount, type UnipileChat } from '../adapters/live/unipileClient.js';
+import { UNIPILE_SESSION_DOWN_TEXT, UnipileClient, UnipileHttpError, UnipileNetworkError, isUnipileSessionDown, type UnipileAccount, type UnipileChat, type UnipileMessage } from '../adapters/live/unipileClient.js';
 import { currentPosition, distanceOf, pickLinkedinAccount } from '../adapters/live/liveAdapter.js';
 import { SHARED_ACCOUNT_MESSAGE, sharedLinkedInAccount, usedAccountIds, type Config } from '../config.js';
 import type { Database } from '../db/database.js';
 import { DuplicateEventError, InvalidTransitionError, LeadNotFoundError, assertTransition, type ContactProfile, type ImportedMessage, type LeadStore } from '../leads/leadStore.js';
 import { randomBetween, sleep } from '../lib/sleep.js';
-import { LinkedInGuard, stableNumber, withinWorkHours, type ActionKind } from './guard.js';
+import { LinkedInGuard, localDayStart, localTime, stableNumber, withinWorkHours, type ActionKind } from './guard.js';
+import { relationTime, type ConnectionStore, type RelationItem } from './connections.js';
 import { otherFounder } from './inviteAccount.js';
 import { founderInviteLimits, type AccountPrefsStore } from './accountPrefs.js';
 import { FOUNDER_SCRAPE_LIMITS, UNIPILE_LIMITS } from './accountUsage.js';
@@ -46,7 +50,9 @@ export class LinkedInError extends Error {
   }
 }
 
-const HOUR_MS = 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
 /** Pausen nach Fehlern: Limit → einen Tag, Zugang → 6 h, Serverfehler (kann ein verstecktes Limit sein) → 1 h. */
 const PAUSE_LIMIT_MS = 24 * HOUR_MS;
 const PAUSE_AUTH_MS = 6 * HOUR_MS;
@@ -80,6 +86,10 @@ export interface LinkedInDeps {
   /** Account wurde pausiert bzw. Pause aufgehoben – für Neuigkeiten (`shared/notifications.ts`). */
   onPause?: (founder: AuthFounderId, until: number, reason: string) => void;
   onResume?: (founder: AuthFounderId) => void;
+  /** Gesehene Anfragen und neue Kontakte (05.11.) – ohne: nichts davon (ältere Tests). */
+  connections?: ConnectionStore;
+  /** Nach dem Abgleich, wenn neue Kontakte zur Übernahme vorgemerkt sind. */
+  onNewContacts?: () => void;
   fetch?: typeof fetch;
   random?: () => number;
   /**
@@ -91,6 +101,17 @@ export interface LinkedInDeps {
 
 /** Schutzgrenze: live nie weniger als 3 s zwischen zwei Aktionen eines Accounts. */
 export const MIN_PAUSE_MS = 3000;
+
+/**
+ * Nachricht aus dem LinkedIn-Chat fürs Cockpit. Eigene Nachricht ohne Text (09.11.: Follow-up als Sticker, Bild oder
+ * Anhang) → `MESSAGE_WITHOUT_TEXT`, damit sie im Verlauf steht und als Follow-up zählt. Nur über das dokumentierte Feld
+ * `text` erkannt – was genau es war, sagt das Cockpit deshalb nicht. Ohne Text vom Lead: ausgelassen (wie bisher).
+ */
+function chatMessage(message: UnipileMessage, now: number): ImportedMessage {
+  const own = message.is_sender === 1;
+  const text = message.text?.trim() ? message.text : own ? MESSAGE_WITHOUT_TEXT : '';
+  return { id: message.id, text: text ?? '', fromLead: message.is_sender === 0, at: Math.min(Date.parse(message.timestamp), now) };
+}
 
 export class LinkedInService {
   readonly guard: LinkedInGuard;
@@ -107,6 +128,8 @@ export class LinkedInService {
   private readonly lastTestInviteAt = new Map<AuthFounderId, number>();
   private lastSyncAt: number | null = null;
   private syncing: Promise<LinkedInSyncResponse> | null = null;
+  /** Woran der letzte Abgleich gescheitert ist (Job-Messung) – null = alle Accounts lesbar. */
+  private syncFailure: string | null = null;
   private chatSyncState: ChatSyncStatus = { running: false, startedAt: null, finishedAt: null, leadsTotal: 0, leadsDone: 0, imported: 0, leadsUpdated: 0, problems: [] };
   private timer: NodeJS.Timeout | null = null;
   /** Wofür der Zeitgeber gerade geplant ist („live|15“) – nur neu planen, wenn sich das ändert. */
@@ -115,6 +138,11 @@ export class LinkedInService {
   private background = false;
   /** Warnung „Pause unter 3 s angehoben“ nur einmal ins Log. */
   private pauseWarned = false;
+  /** Zeitgeber der eingeplanten Anfragen (05.11.). */
+  private queueTimer: NodeJS.Timeout | null = null;
+  private queueBusy = false;
+  /** Wann die gesendeten Anfragen je Gründer zuletzt bei LinkedIn gelesen wurden. */
+  private readonly invitesCheckedAt = new Map<AuthFounderId, number>();
 
   constructor(private readonly deps: LinkedInDeps) {
     this.guard = new LinkedInGuard(deps.db, deps.config.linkedin, (founder) => founderInviteLimits(deps.config, deps.accountPrefs)[founder]);
@@ -155,11 +183,48 @@ export class LinkedInService {
     return this.mode === 'mock' ? `mock-${founder}` : this.settings.accounts[founder];
   }
 
+  /** Deaktivierter Account (Wunsch des Nutzers 03.11.): kein Traffic mehr darüber – auch kein Senden. */
+  private isDisabled(accountId: string | null): boolean {
+    return !!accountId && !!this.deps.accountPrefs?.isDisabled(accountId);
+  }
+
+  private assertEnabled(accountId: string, founder: AuthFounderId): void {
+    if (this.isDisabled(accountId)) {
+      throw new LinkedInError(
+        'linkedin_no_account',
+        409,
+        `Der LinkedIn-Account von ${this.founderName(founder)} ist deaktiviert – darüber geht gerade nichts raus. Unter Einstellungen → LinkedIn → Accounts wieder einschalten.`,
+      );
+    }
+  }
+
   /** Live: beide Gründer auf demselben Account → nichts senden (die Grenzen gälten doppelt). */
   private assertOwnAccounts(): void {
     if (this.mode === 'live' && sharedLinkedInAccount(this.deps.config)) {
       throw new LinkedInError('linkedin_no_account', 409, `${SHARED_ACCOUNT_MESSAGE} Bitte unter Einstellungen → Senden über LinkedIn ändern.`);
     }
+  }
+
+  /**
+   * Wie Anfragen über den Account des Gründers rausgehen (05.11.): `manual` = gar nicht über das Cockpit, `spread` =
+   * eingeplant über den Tag (nur live), `instant` = sofort. Ohne Account bzw. Einstellungen: Standard.
+   */
+  inviteModeOf(founder: AuthFounderId, now = Date.now()): { mode: LinkedInInviteMode; until: number | null } {
+    const accountId = this.accountOf(founder);
+    const fallback = this.settings.inviteMode;
+    if (!accountId || !this.deps.accountPrefs) return { mode: fallback, until: null };
+    return this.deps.accountPrefs.inviteMode(accountId, now, fallback);
+  }
+
+  private assertNotManual(founder: AuthFounderId, now: number): void {
+    const { mode, until } = this.inviteModeOf(founder, now);
+    if (mode !== 'manual') return;
+    const end = until ? ` bis ${new Date(until).toLocaleDateString('de-DE', { timeZone: this.settings.workHours.timeZone, day: '2-digit', month: '2-digit' })}` : '';
+    throw new LinkedInError(
+      'linkedin_manual',
+      409,
+      `${this.founderName(founder)} vernetzt sich${end} nur von Hand auf LinkedIn – schick die Anfrage dort selbst. Sobald sie angenommen ist, übernimmt das Cockpit den Kontakt von allein.`,
+    );
   }
 
   status(now = Date.now()): LinkedInStatusResponse {
@@ -168,6 +233,8 @@ export class LinkedInService {
       accounts: AUTH_FOUNDER_IDS.map((founder) => {
         const usage = this.guard.usage(founder, now);
         const pause = this.mode === 'live' ? this.guard.activePause(founder, now) : null;
+        const inviteMode = this.inviteModeOf(founder, now);
+        const queue = this.queuedFor(founder);
         return {
           founder,
           connected: this.mode !== 'off' && this.accountOf(founder) !== null,
@@ -176,6 +243,14 @@ export class LinkedInService {
           messagesToday: { used: usage.messagesToday, limit: this.settings.messagesPerDay },
           pausedUntil: pause?.until ?? null,
           pauseReason: pause?.reason ?? null,
+          inviteMode: inviteMode.mode,
+          manualUntil: inviteMode.until,
+          // Die Anfragen-Zählung enthält seit 05.11. auch die von Hand auf LinkedIn gesendeten (guard.invitesSince).
+          invitesSentToday: { used: usage.invitesToday, limit: this.guard.invitesPerDay(founder) },
+          manualInvitesToday: this.deps.connections?.manualSince(founder, localDayStart(now, this.settings.workHours.timeZone)) ?? 0,
+          queuedInvites: queue.count,
+          nextQueuedAt: queue.next,
+          invitesCheckedAt: this.mode === 'mock' ? this.lastSyncAt : (this.invitesCheckedAt.get(founder) ?? null),
         };
       }),
       workHours: { ...this.settings.workHours, days: [...this.settings.workHours.days] },
@@ -191,8 +266,23 @@ export class LinkedInService {
    * Vernetzungsanfrage. founder = Gründer des angemeldeten Kontos (Mitarbeiter: sein Gründer; ohne Anmeldung: Besitzer
    * des Leads). actor = Anzeigename des Kontos fürs Ereignis.
    */
-  invite(leadId: string, founder: AuthFounderId | null, message?: string, actor: string | null = null, clientId?: string): Promise<CockpitLead> {
+  async invite(leadId: string, founder: AuthFounderId | null, message?: string, actor: string | null = null, clientId?: string): Promise<CockpitLead> {
     const note = message?.trim() || undefined;
+    // Über den Tag verteilt (05.11.): nur echt gesendet wird eingeplant; Simulation und „von Hand“ wie bisher.
+    if (this.mode === 'live') {
+      const lead = this.deps.leads.get(leadId);
+      if (lead && !(clientId && this.deps.leads.hasClientEvent(leadId, clientId))) {
+        const owner = founder ?? lead.owner;
+        const sender = this.inviteSender(owner, Date.now());
+        if (lead.owner === owner && this.accountOf(sender) && this.inviteModeOf(sender).mode === 'spread') {
+          return this.queueInvite(lead, owner, sender, note ?? null, actor, clientId ?? null);
+        }
+      }
+    }
+    return this.sendInvite(leadId, founder, note, actor, clientId);
+  }
+
+  private sendInvite(leadId: string, founder: AuthFounderId | null, note: string | undefined, actor: string | null, clientId: string | undefined): Promise<CockpitLead> {
     return this.run(leadId, founder, actor, clientId, 'invite', 'invite_sent', async (lead, accountId, sender) => {
       let invitationId: string | null;
       if (this.unipile) {
@@ -282,6 +372,8 @@ export class LinkedInService {
         noAccountMessage(this.founderName(sender)),
       );
     }
+    this.assertEnabled(accountId, sender);
+    if (kind === 'invite') this.assertNotManual(sender, Date.now());
     this.checkBeforeSend(lead, sender, kind, action, Date.now());
 
     return this.enqueue(sender, async () => {
@@ -300,8 +392,165 @@ export class LinkedInService {
       const now = Date.now();
       this.guard.record({ founder: sender, accountId, leadId, kind, status: 'sent', detail: result.detail }, now);
       this.deps.log.info({ leadId, founder, sender, kind }, 'LinkedIn-Aktion gesendet');
-      return this.deps.leads.applyAction(leadId, { ...result.request, ...(clientId ? { clientId } : {}) }, founder, now, { state: result.state }, actor);
+      const updated = this.deps.leads.applyAction(leadId, { ...result.request, ...(clientId ? { clientId } : {}) }, founder, now, { state: result.state }, actor);
+      if (kind === 'invite') {
+        this.deps.connections?.recordCockpitInvite(sender, updated, now);
+        if (updated.queuedInvite) return this.deps.leads.setQueuedInvite(leadId, null, now) ?? updated;
+      }
+      return updated;
     });
+  }
+
+  // ── Anfragen über den Tag verteilt (05.11.) ─────────────────────────────
+
+  /** Eingeplante Anfragen über den Account des Gründers: Anzahl und nächste. */
+  private queuedFor(founder: AuthFounderId): { count: number; next: number | null } {
+    const row = this.deps.db.prepare('SELECT COUNT(*) AS n, MIN(due_at) AS next FROM linkedin_invite_queue WHERE founder = ?').get(founder) as {
+      n: number;
+      next: number | null;
+    };
+    return { count: row.n, next: row.next };
+  }
+
+  /**
+   * Anfrage einplanen statt sofort senden. Prüft vorab wie beim Senden (Stufe, Account, Pause, „nur von Hand“), aber
+   * nicht Arbeitszeit und Tageslimit – die regelt der Plan. Schon eingeplant → unverändert zurück.
+   */
+  private queueInvite(lead: CockpitLead, owner: AuthFounderId, sender: AuthFounderId, note: string | null, actor: string | null, clientId: string | null): CockpitLead {
+    if (lead.queuedInvite) return lead;
+    try {
+      assertTransition(lead, 'invite_sent');
+    } catch (error) {
+      if (error instanceof InvalidTransitionError) throw new LinkedInError('invalid_transition', 409, error.message);
+      throw error;
+    }
+    this.assertOwnAccounts();
+    const accountId = this.accountOf(sender);
+    if (!accountId) throw new LinkedInError('linkedin_no_account', 409, noAccountMessage(this.founderName(sender)));
+    this.assertEnabled(accountId, sender);
+    this.assertNotManual(sender, Date.now());
+    const now = Date.now();
+    const at = this.nextInviteSlot(sender, now);
+    this.deps.db
+      .prepare(
+        `INSERT INTO linkedin_invite_queue (lead_id, founder, by_founder, actor, message, client_id, due_at, queued_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (lead_id) DO NOTHING`,
+      )
+      .run(lead.id, sender, owner, actor, note, clientId, at, now);
+    this.deps.log.info({ leadId: lead.id, founder: sender, at }, 'Vernetzungsanfrage eingeplant');
+    return this.deps.leads.setQueuedInvite(lead.id, { at, message: note, queuedAt: now }, now) ?? lead;
+  }
+
+  /** Eingeplante Anfrage zurücknehmen (`DELETE /api/leads/:id/linkedin/invite`). */
+  cancelQueuedInvite(leadId: string): CockpitLead {
+    const lead = this.deps.leads.get(leadId);
+    if (!lead) throw new LeadNotFoundError();
+    this.deps.db.prepare('DELETE FROM linkedin_invite_queue WHERE lead_id = ?').run(leadId);
+    return lead.queuedInvite ? (this.deps.leads.setQueuedInvite(leadId, null) ?? lead) : lead;
+  }
+
+  /**
+   * Nächster Sendezeitpunkt über den Account: innerhalb der Arbeitszeit, mindestens `INVITE_SPREAD_MIN_GAP_MINUTES`
+   * nach der letzten eingeplanten Anfrage, zufällig im Rest des Tages verteilt, sodass die freien Plätze bis
+   * Feierabend reichen. Ist der Tag voll (gesendet + eingeplant ≥ Tagesgrenze) oder vorbei, der nächste Arbeitstag.
+   */
+  nextInviteSlot(founder: AuthFounderId, now: number, exclude: string | null = null): number {
+    const { fromHour, toHour, days, timeZone } = this.settings.workHours;
+    const gap = INVITE_SPREAD_MIN_GAP_MINUTES * MINUTE_MS;
+    const limit = Math.max(1, this.guard.invitesPerDay(founder));
+    const queued = (this.deps.db.prepare('SELECT lead_id, due_at FROM linkedin_invite_queue WHERE founder = ?').all(founder) as { lead_id: string; due_at: number }[])
+      .filter((row) => row.lead_id !== exclude)
+      .map((row) => row.due_at);
+    const todayStart = localDayStart(now, timeZone);
+    for (let offset = 0; offset < 21; offset++) {
+      // Tagesanfang je Tag neu bestimmen (Sommer-/Winterzeit: nicht einfach 24 h addieren).
+      const dayStart = localDayStart(todayStart + offset * DAY_MS + 12 * HOUR_MS, timeZone);
+      const weekday = localTime(dayStart + 12 * HOUR_MS, timeZone).weekday;
+      if (!days.includes(weekday)) continue;
+      const windowStart = dayStart + fromHour * HOUR_MS;
+      const windowEnd = dayStart + toHour * HOUR_MS;
+      const inDay = queued.filter((at) => at >= dayStart && at < dayStart + DAY_MS);
+      const sent = offset === 0 ? this.guard.usage(founder, now).invitesToday : 0;
+      const free = limit - sent - inDay.length;
+      if (free <= 0) continue;
+      const last = inDay.length ? Math.max(...inDay) : null;
+      const from = Math.max(windowStart, offset === 0 ? now + 2 * MINUTE_MS : windowStart, last !== null ? last + gap : windowStart);
+      if (from >= windowEnd - MINUTE_MS) continue;
+      // Rest des Tages gleichmäßig auf die freien Plätze verteilen, darin zufällig.
+      const share = Math.max(0, (windowEnd - MINUTE_MS - from) / free);
+      return Math.round(from + share * (this.deps.random ?? Math.random)());
+    }
+    // Kein Arbeitstag eingestellt o. Ä.: morgen früh zur Arbeitszeit.
+    return localDayStart(todayStart + DAY_MS + 12 * HOUR_MS, timeZone) + fromHour * HOUR_MS;
+  }
+
+  /**
+   * Fällige eingeplante Anfragen senden – je Account höchstens eine pro Runde (jede Minute), nur in der Arbeitszeit.
+   * Länger als 30 Minuten überfällig (Server war aus) → neu einplanen statt alles auf einmal nachzuholen.
+   * Grenze, Pause, Arbeitszeit, Netz → später noch einmal; alles andere (abgelehnt, Stufe passt nicht …) → raus aus dem
+   * Plan, mit Notiz im Verlauf.
+   */
+  async processQueue(now = Date.now()): Promise<number> {
+    if (this.queueBusy || this.mode !== 'live') return 0;
+    this.queueBusy = true;
+    let sent = 0;
+    try {
+      for (const founder of AUTH_FOUNDER_IDS) {
+        const row = this.deps.db
+          .prepare('SELECT * FROM linkedin_invite_queue WHERE founder = ? AND due_at <= ? ORDER BY due_at ASC LIMIT 1')
+          .get(founder, now) as { lead_id: string; founder: string; by_founder: string | null; actor: string | null; message: string | null; client_id: string | null; due_at: number } | undefined;
+        if (!row) continue;
+        const lead = this.deps.leads.get(row.lead_id);
+        if (!lead || lead.stage !== 'new') {
+          this.dropQueued(row.lead_id, lead ? 'Die Stufe hat sich geändert.' : null);
+          continue;
+        }
+        if (!withinWorkHours(this.settings, now) || now - row.due_at > 30 * MINUTE_MS) {
+          this.replan(row.lead_id, founder, now);
+          continue;
+        }
+        try {
+          await this.sendInvite(row.lead_id, (row.by_founder as AuthFounderId | null) ?? lead.owner, row.message ?? undefined, row.actor, row.client_id ?? undefined);
+          this.deps.db.prepare('DELETE FROM linkedin_invite_queue WHERE lead_id = ?').run(row.lead_id);
+          sent++;
+        } catch (error) {
+          if (error instanceof DuplicateEventError) {
+            this.dropQueued(row.lead_id, null);
+          } else if (error instanceof LinkedInError && ['linkedin_outside_hours', 'linkedin_limit', 'linkedin_paused', 'linkedin_error'].includes(error.code)) {
+            const pause = this.guard.activePause(founder, now);
+            this.replan(row.lead_id, founder, Math.max(now, pause?.until ?? 0));
+          } else {
+            this.dropQueued(row.lead_id, error instanceof Error ? error.message : 'Unbekannter Fehler.');
+          }
+        }
+      }
+    } finally {
+      this.queueBusy = false;
+    }
+    return sent;
+  }
+
+  private replan(leadId: string, founder: AuthFounderId, from: number): void {
+    const at = this.nextInviteSlot(founder, from, leadId);
+    this.deps.db.prepare('UPDATE linkedin_invite_queue SET due_at = ? WHERE lead_id = ?').run(at, leadId);
+    const lead = this.deps.leads.get(leadId);
+    if (lead?.queuedInvite) this.deps.leads.setQueuedInvite(leadId, { ...lead.queuedInvite, at });
+  }
+
+  /** Aus dem Plan nehmen; mit Grund eine Notiz im Verlauf („nicht gesendet: …“). */
+  private dropQueued(leadId: string, reason: string | null): void {
+    this.deps.db.prepare('DELETE FROM linkedin_invite_queue WHERE lead_id = ?').run(leadId);
+    const lead = this.deps.leads.get(leadId);
+    if (!lead) return;
+    if (lead.queuedInvite) this.deps.leads.setQueuedInvite(leadId, null);
+    if (reason) {
+      try {
+        this.deps.leads.applyAction(leadId, { action: 'note', text: `Eingeplante Vernetzungsanfrage nicht gesendet: ${reason}` }, null, Date.now(), {}, null);
+      } catch {
+        // Notiz ist nur ein Hinweis.
+      }
+      this.deps.log.warn({ leadId, reason }, 'Eingeplante Vernetzungsanfrage verworfen');
+    }
   }
 
   /**
@@ -349,9 +598,11 @@ export class LinkedInService {
   private inviteSender(founder: AuthFounderId, now: number): AuthFounderId {
     const free = (account: AuthFounderId) =>
       !this.guard.limitReached(account, 'invite', now) && !(this.mode === 'live' && this.guard.activePause(account, now));
-    if (free(founder)) return founder;
+    // „Nur von Hand“ (05.11.): der eigene Account bleibt (dann meldet `assertNotManual` es), nie Ausweich-Account.
+    if (this.inviteModeOf(founder, now).mode === 'manual') return founder;
+    if (free(founder) && !this.isDisabled(this.accountOf(founder))) return founder;
     const other = this.settings.accountFallback ? otherFounder(founder) : null;
-    if (other && this.accountOf(other) && free(other)) return other;
+    if (other && this.accountOf(other) && !this.isDisabled(this.accountOf(other)) && this.inviteModeOf(other, now).mode !== 'manual' && free(other)) return other;
     return founder;
   }
 
@@ -367,9 +618,10 @@ export class LinkedInService {
       if (pause) {
         throw new LinkedInError('linkedin_paused', 503, `LinkedIn-Aktionen für ${this.founderName(founder)} pausiert: ${pause.reason}`, Math.ceil((pause.until - now) / 1000));
       }
-      if (!withinWorkHours(this.settings, now)) {
+      // Arbeitszeit nur für Vernetzungsanfragen (07.11.): Nachrichten gehen raus, wann die Aufgabe abgearbeitet wird.
+      if (kind === 'invite' && !withinWorkHours(this.settings, now)) {
         const { fromHour, toHour } = this.settings.workHours;
-        throw new LinkedInError('linkedin_outside_hours', 409, `Gesendet wird nur zu Arbeitszeiten (${fromHour}–${toHour} Uhr an Werktagen).`);
+        throw new LinkedInError('linkedin_outside_hours', 409, `Vernetzungsanfragen gehen nur zu Arbeitszeiten raus (${fromHour}–${toHour} Uhr an den eingestellten Arbeitstagen).`);
       }
     }
     const limit = this.guard.limitReached(founder, kind, now);
@@ -400,6 +652,7 @@ export class LinkedInService {
     if (this.mode !== 'live' || !this.unipile) throw new LinkedInError('linkedin_off', 409, OFF_MESSAGE);
     const accountId = this.accountOf(founder);
     if (!accountId) throw new LinkedInError('linkedin_no_account', 409, noAccountMessage(this.founderName(founder)));
+    this.assertEnabled(accountId, founder);
     this.assertOwnAccounts();
     // Vorab prüfen (schnelle Antwort), in der Warteschlange noch einmal – wie beim Senden im Cockpit.
     this.checkTestInvite(founder, Date.now());
@@ -470,6 +723,7 @@ export class LinkedInService {
   private testAccount(founder: AuthFounderId): string {
     const accountId = this.deps.config.mode === 'mock' ? `mock-${founder}` : this.settings.accounts[founder];
     if (!accountId) throw new LinkedInError('linkedin_no_account', 409, noAccountMessage(this.founderName(founder)));
+    this.assertEnabled(accountId, founder);
     return accountId;
   }
 
@@ -514,6 +768,7 @@ export class LinkedInService {
     if (this.deps.config.mode === 'mock') return mockContact(identifier);
     const accountId = this.settings.accounts[owner];
     if (!accountId) throw new LinkedInError('linkedin_no_account', 409, noAccountMessage(this.founderName(owner)));
+    this.assertEnabled(accountId, owner);
     const client = this.testClient();
     let profile;
     try {
@@ -565,7 +820,7 @@ export class LinkedInService {
     } else {
       const accountId = this.settings.accounts[owner];
       const { dsn, apiKey } = this.deps.config.unipile;
-      if (!accountId || !dsn || !apiKey) return null;
+      if (!accountId || !dsn || !apiKey || this.isDisabled(accountId)) return null;
       try {
         const client = this.testClient();
         const chats = await client.attendeeChats({ accountId, attendeeId: lead.person.providerId, limit: 10 }, AbortSignal.timeout(30_000));
@@ -574,9 +829,12 @@ export class LinkedInService {
         const response = await client.chatMessages({ chatId: chat.id, limit: 100 }, AbortSignal.timeout(30_000));
         chatId = chat.id;
         messages = (response.items ?? [])
-          .map((message) => ({ id: message.id, text: message.text ?? '', fromLead: message.is_sender === 0, at: Math.min(Date.parse(message.timestamp), now) }))
+          .map((message) => chatMessage(message, now))
           .filter((message) => Number.isFinite(message.at) && message.text.trim());
       } catch (error) {
+        // 404 „Attendee not found“ (10.11., bei fast jedem neuen Kontakt): Mit der Person gibt es noch keine
+        // Unterhaltung – nichts zu übernehmen, keine Warnung.
+        if (error instanceof UnipileHttpError && error.status === 404) return { lead, imported: 0 };
         this.deps.log.warn({ leadId, error: classify(error).log }, 'Chat des Kontakts nicht übernommen');
         return null;
       }
@@ -696,6 +954,7 @@ export class LinkedInService {
 
   private async syncOnce(): Promise<LinkedInSyncResponse> {
     const result: LinkedInSyncResponse = { accepted: [], replied: [], problems: [], syncedAt: Date.now() };
+    this.syncFailure = null;
     if (this.mode === 'off' && !this.watching) {
       result.problems.push('Unipile ist nicht eingerichtet – angenommene Anfragen lassen sich nicht automatisch prüfen.');
       return result;
@@ -706,19 +965,45 @@ export class LinkedInService {
         result.problems.push(`${this.founderName(founder)}: kein LinkedIn-Account eingetragen.`);
         continue;
       }
+      if (this.isDisabled(accountId)) {
+        result.problems.push(`${this.founderName(founder)}: LinkedIn-Account ist deaktiviert – kein Abgleich.`);
+        continue;
+      }
       try {
         if (this.mode === 'mock') this.syncMock(founder, result);
-        else await this.syncLive(founder, accountId, result);
+        else {
+          await this.syncLive(founder, accountId, result);
+          this.liftAccessPause(founder);
+        }
       } catch (error) {
         const classified = classify(error);
         // Nur Limit/Zugang pausieren – ein Serverfehler beim Lesen sperrt nicht das Senden.
         if (classified.pauseMs && stopsReading(error)) this.pause(founder, Date.now() + classified.pauseMs, classified.reason);
         this.deps.log.warn({ founder, error: classified.log }, 'LinkedIn-Abgleich fehlgeschlagen');
         result.problems.push(`${this.founderName(founder)}: ${classified.reason}`);
+        // Für die Job-Messung: ein fehlender oder deaktivierter Account ist kein Fehlschlag, ein gescheiterter Abruf schon.
+        this.syncFailure = `${this.founderName(founder)}: ${classified.reason}`;
       }
     }
     this.lastSyncAt = result.syncedAt;
+    // Liegen gebliebene neue Kontakte (Übernahme scheiterte z. B. am Tageslimit) bei jedem Abgleich erneut versuchen –
+    // nicht erst, wenn wieder ein neuer Kontakt dazukommt (06.11.).
+    if (this.deps.connections?.hasPending()) this.deps.onNewContacts?.();
     return result;
+  }
+
+  /**
+   * Pause wegen abgelehntem Zugang (Account bei Unipile getrennt) von selbst aufheben, sobald der Abgleich über den
+   * Account wieder durchgeht (06.11.: Account neu verbunden, Cockpit blieb trotzdem bis zum Ablauf pausiert).
+   * Pausen wegen Limit bleiben.
+   */
+  private liftAccessPause(founder: AuthFounderId): void {
+    const pause = this.guard.activePause(founder, Date.now());
+    if (!pause || !pause.reason.startsWith(ACCESS_PAUSE_REASON)) return;
+    if (this.guard.clearPause(founder)) {
+      this.deps.log.info({ founder }, 'LinkedIn-Pause aufgehoben – Account geht wieder');
+      this.deps.onResume?.(founder);
+    }
   }
 
   /**
@@ -736,29 +1021,55 @@ export class LinkedInService {
     const unipile = this.readClient!;
     const leads = this.openLeads(founder, true);
 
-    // Angenommene Anfragen: neueste Kontakte (bis 3 Seiten) mit offenen Anfragen abgleichen.
-    const invited = leads.filter((lead) => lead.stage === 'invited');
-    if (invited.length) {
-      const byId = new Map(invited.map((lead) => [lead.person.providerId, lead]));
-      const byPublic = new Map(invited.filter((lead) => lead.person.publicIdentifier).map((lead) => [lead.person.publicIdentifier!.toLowerCase(), lead]));
+    // Gesendete Anfragen (05.11.): neue merken – was nicht aus dem Cockpit kam, ist „von Hand“ (Sales Navigator …).
+    const connections = this.deps.connections;
+    if (connections) {
+      const items: import('./connections.js').SentInvitationItem[] = [];
       let cursor: string | null | undefined = null;
-      for (let page = 0; page < 3 && byId.size; page++) {
-        const response: { items: { member_id?: string; public_identifier?: string; created_at?: number }[]; cursor?: string | null } =
-          await unipile.listRelations({ accountId, limit: 100, cursor }, AbortSignal.timeout(30_000));
-        for (const relation of response.items ?? []) {
-          const lead = (relation.member_id && byId.get(relation.member_id)) || (relation.public_identifier && byPublic.get(relation.public_identifier.toLowerCase()));
-          if (!lead || !byId.has(lead.person.providerId)) continue;
-          byId.delete(lead.person.providerId);
-          // created_at: Zeitpunkt der Verbindung; Sekunden oder Millisekunden – beides abfangen.
-          const created = relation.created_at && relation.created_at > 0 ? (relation.created_at < 1e12 ? relation.created_at * 1000 : relation.created_at) : null;
-          // Nie vor der eigenen Anfrage (falsche Uhr/alte Verbindung), nie in der Zukunft.
-          const at = created ? Math.min(Math.max(created, lead.lastContactAt ?? 0), Date.now()) : undefined;
-          this.deps.leads.applyAction(lead.id, { action: 'invite_accepted', at }, null, Date.now(), {});
-          result.accepted.push(lead.id);
-        }
+      for (let page = 0; page < 5; page++) {
+        const response: { items: import('./connections.js').SentInvitationItem[]; cursor?: string | null } = await unipile.invitationsSent(
+          { accountId, limit: 100, cursor },
+          AbortSignal.timeout(30_000),
+        );
+        items.push(...(response.items ?? []));
         cursor = response.cursor;
         if (!cursor) break;
       }
+      connections.recordSentList(founder, items, Date.now());
+      this.invitesCheckedAt.set(founder, Date.now());
+    }
+
+    // Angenommene Anfragen: neueste Kontakte (bis 3 Seiten) mit offenen Anfragen abgleichen. Seit 05.11. außerdem neue
+    // Kontakte ohne Lead vormerken (Übernahme), solange die Seiten Kontakte seit Beobachtungsbeginn enthalten.
+    const invited = this.openLeads(founder, true).filter((lead) => lead.stage === 'invited');
+    const watchFrom = connections ? connections.relationsSince(accountId, Date.now()) : null;
+    if (invited.length || watchFrom !== null) {
+      const byId = new Map(invited.map((lead) => [lead.person.providerId, lead]));
+      const byPublic = new Map(invited.filter((lead) => lead.person.publicIdentifier).map((lead) => [lead.person.publicIdentifier!.toLowerCase(), lead]));
+      let cursor: string | null | undefined = null;
+      for (let page = 0; page < 3; page++) {
+        const response: { items: RelationItem[]; cursor?: string | null } = await unipile.listRelations({ accountId, limit: 100, cursor }, AbortSignal.timeout(30_000));
+        let fresh = false;
+        for (const relation of response.items ?? []) {
+          const created = relationTime(relation.created_at);
+          const lead = (relation.member_id && byId.get(relation.member_id)) || (relation.public_identifier && byPublic.get(relation.public_identifier.toLowerCase()));
+          if (lead && byId.has(lead.person.providerId)) {
+            byId.delete(lead.person.providerId);
+            // Nie vor der eigenen Anfrage (falsche Uhr/alte Verbindung), nie in der Zukunft.
+            const at = created ? Math.min(Math.max(created, lead.lastContactAt ?? 0), Date.now()) : undefined;
+            this.deps.leads.applyAction(lead.id, { action: 'invite_accepted', at }, null, Date.now(), {});
+            result.accepted.push(lead.id);
+          }
+          if (connections && watchFrom !== null && created !== null && created >= watchFrom) {
+            fresh = true;
+            connections.noteRelation(founder, relation, Date.now());
+          }
+        }
+        cursor = response.cursor;
+        if (!cursor || (!byId.size && !fresh)) break;
+      }
+      // Angestoßen wird die Übernahme einmal am Ende des Abgleichs (`syncOnce`, sobald etwas wartet) – nicht hier je
+      // Gründer: Ein wartender Kontakt zählte sonst bei jedem Abgleich als „neu“ und löste zwei Runden aus (10.11.).
     }
 
     // Nachrichten (seit 20.10.): erst die Unterhaltungen mit neuer Aktivität seit dem letzten Abgleich holen (ein Abruf
@@ -797,7 +1108,7 @@ export class LinkedInService {
       try {
         const response = await unipile.chatMessages({ chatId, limit: 20 }, AbortSignal.timeout(30_000));
         const messages = (response.items ?? [])
-          .map((message) => ({ id: message.id, text: message.text ?? '', fromLead: message.is_sender === 0, at: Math.min(Date.parse(message.timestamp), Date.now()) }))
+          .map((message) => chatMessage(message, Date.now()))
           .filter((message) => Number.isFinite(message.at) && message.text.trim());
         // Unterhaltung, die das Cockpit begonnen hat: nur Nachrichten ab ihrem Beginn (ältere sind Vorgeschichte).
         const startedAt = lead.linkedin?.chatId === chatId ? lead.linkedin.chatStartedAt : null;
@@ -827,11 +1138,11 @@ export class LinkedInService {
     if (this.deps.config.mode !== 'mock' && !this.readClient) {
       throw new LinkedInError('linkedin_off', 409, 'Unipile ist nicht eingerichtet – trag Adresse und Token unter Einstellungen → LinkedIn (Unipile) ein.');
     }
-    const founders = (founder ? [founder] : [...AUTH_FOUNDER_IDS]).filter((id) => this.accountOf(id));
+    const founders = (founder ? [founder] : [...AUTH_FOUNDER_IDS]).filter((id) => this.accountOf(id) && !this.isDisabled(this.accountOf(id)));
     const plan = founders.map((id) => ({ founder: id, leads: this.chatLeads(id) }));
     const problems = (founder ? [founder] : [...AUTH_FOUNDER_IDS])
-      .filter((id) => !this.accountOf(id))
-      .map((id) => `${this.founderName(id)}: kein LinkedIn-Account eingetragen.`);
+      .filter((id) => !founders.includes(id))
+      .map((id) => `${this.founderName(id)}: ${this.accountOf(id) ? 'LinkedIn-Account ist deaktiviert – kein Abgleich.' : 'kein LinkedIn-Account eingetragen.'}`);
     this.chatSyncState = {
       running: true,
       startedAt: Date.now(),
@@ -907,7 +1218,7 @@ export class LinkedInService {
     return {
       chatId,
       messages: (response.items ?? [])
-        .map((message) => ({ id: message.id, text: message.text ?? '', fromLead: message.is_sender === 0, at: Math.min(Date.parse(message.timestamp), now) }))
+        .map((message) => chatMessage(message, now))
         .filter((message) => Number.isFinite(message.at) && message.text.trim()),
     };
   }
@@ -936,6 +1247,11 @@ export class LinkedInService {
         .filter((event) => event.kind === 'message_sent' || event.kind === 'message_received')
         .map((event) => `${event.kind}|${normalize(event.text)}`),
     );
+    // Von Hand eingetragene Nachrichten ohne Text (Sticker, 09.11.) – Zeitpunkte zum Abgleich mit dem Chat.
+    const manualWithoutText = leads
+      .events(leadId)
+      .filter((event) => event.kind === 'message_sent' && event.text === MESSAGE_WITHOUT_TEXT && !event.title.includes('aus LinkedIn übernommen'))
+      .map((event) => event.at);
     const closedSince = lead.stage === 'lost' || lead.stage === 'handed_over' ? lead.lastActivityAt : null;
     const now = Date.now();
     let imported = 0;
@@ -948,7 +1264,15 @@ export class LinkedInService {
       if (kind === 'message_sent' && leads.get(leadId)!.stage === 'invited') continue;
       if (this.guard.seen(message.id)) continue;
       this.guard.markSeen(message.id, leadId, now);
-      if (known.has(`${kind}|${normalize(message.text)}`)) continue;
+      if (message.text === MESSAGE_WITHOUT_TEXT) {
+        // Ohne Text: schon über „Follow-up schon gesendet“ eingetragen (bis 12 h daneben)? Dann nicht doppelt. Der
+        // Textvergleich unten passt hier nicht – zwei Sticker hätten denselben „Text“.
+        const logged = manualWithoutText.findIndex((at) => Math.abs(at - message.at) <= 12 * HOUR_MS);
+        if (logged >= 0) {
+          manualWithoutText.splice(logged, 1);
+          continue;
+        }
+      } else if (known.has(`${kind}|${normalize(message.text)}`)) continue;
       if (closedSince !== null && message.at <= closedSince) continue;
       const current = leads.get(leadId)!;
       try {
@@ -1063,6 +1387,11 @@ export class LinkedInService {
       return {
         ...account,
         position: pref.position,
+        disabled: pref.disabled,
+        // Nur Gründer-Accounts senden – dort zeigt die Oberfläche, wie Anfragen rausgehen (05.11.).
+        ...(founder
+          ? { inviteMode: prefs.inviteMode(account.id, Date.now(), config.linkedin.inviteMode).mode, manualUntil: prefs.inviteMode(account.id, Date.now(), config.linkedin.inviteMode).until }
+          : {}),
         limits: { profilesPerDay: pref.profilesPerDay, searchResultsPerDay: pref.searchResultsPerDay, invitesPerDay: pref.invitesPerDay },
         limitDefaults: {
           profilesPerDay: (founder ? FOUNDER_SCRAPE_LIMITS : UNIPILE_LIMITS).profilesPerDay,
@@ -1071,6 +1400,20 @@ export class LinkedInService {
         },
       };
     });
+  }
+
+  /**
+   * Lesender Zugang für die Überprüfung (05.11.): Unipile-Client und Account des Gründers – oder ein Satz, warum nicht.
+   * Braucht nur den Unipile-Zugang, nicht LINKEDIN_ACTIONS. Simulation: kein Client, kein Problem.
+   */
+  readerFor(founder: AuthFounderId): { client: UnipileClient | null; accountId: string | null; problem: string | null } {
+    if (this.mode === 'mock') return { client: null, accountId: `mock-${founder}`, problem: null };
+    const accountId = this.settings.accounts[founder];
+    if (!accountId) return { client: null, accountId: null, problem: `${this.founderName(founder)}: kein LinkedIn-Account eingetragen.` };
+    if (this.isDisabled(accountId)) return { client: null, accountId, problem: `${this.founderName(founder)}: LinkedIn-Account ist deaktiviert.` };
+    const client = this.readClient;
+    if (!client) return { client: null, accountId, problem: 'Unipile ist nicht eingerichtet.' };
+    return { client, accountId, problem: null };
   }
 
   /** Pause eines Accounts aufheben (wie `linkedinCli fortsetzen`). Keine Pause → unverändert. */
@@ -1091,6 +1434,13 @@ export class LinkedInService {
   startBackgroundSync(): void {
     this.background = true;
     this.replanSync();
+    // Eingeplante Anfragen (05.11.): jede Minute nachsehen – sendet nur live und in der Arbeitszeit.
+    if (!this.queueTimer) {
+      this.queueTimer = setInterval(() => {
+        trackJob('eingeplante_anfragen', () => this.processQueue()).catch((error) => this.deps.log.error({ err: error }, 'Eingeplante Anfragen fehlgeschlagen'));
+      }, MINUTE_MS);
+      this.queueTimer.unref();
+    }
   }
 
   /**
@@ -1107,7 +1457,7 @@ export class LinkedInService {
     this.timerPlan = plan;
     if (!plan) return;
     this.timer = setInterval(() => {
-      this.sync().catch((error) => this.deps.log.error({ err: error }, 'LinkedIn-Abgleich fehlgeschlagen'));
+      trackJob('linkedin_abgleich', () => this.sync(), () => this.syncFailure).catch((error) => this.deps.log.error({ err: error }, 'LinkedIn-Abgleich fehlgeschlagen'));
     }, minutes * 60_000);
     this.timer.unref();
   }
@@ -1118,6 +1468,8 @@ export class LinkedInService {
   }
 
   close(): void {
+    if (this.queueTimer) clearInterval(this.queueTimer);
+    this.queueTimer = null;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     this.timerPlan = null;
@@ -1127,6 +1479,9 @@ export class LinkedInService {
 
 const TEST_PROFILE_KEY = 'linkedin_test_profile';
 const TEST_MESSAGE_COOLDOWN_MS = 60_000;
+
+/** Anfang des Pausen-Grunds bei abgelehntem Zugang – daran erkennt `liftAccessPause` die Pause. */
+const ACCESS_PAUSE_REASON = 'Unipile lehnt den Zugang ab';
 
 const OFF_MESSAGE = 'Echte LinkedIn-Aktionen sind ausgeschaltet – einschalten unter Einstellungen → Senden über LinkedIn.';
 
@@ -1213,7 +1568,7 @@ export function classify(error: unknown): Classified {
     return {
       code: 'linkedin_paused',
       status: 503,
-      reason: 'Unipile lehnt den Zugang ab (API-Key, Berechtigung oder LinkedIn-Account getrennt).',
+      reason: `${ACCESS_PAUSE_REASON} (API-Key, Berechtigung oder LinkedIn-Account getrennt).`,
       log,
       pauseMs: PAUSE_AUTH_MS,
     };

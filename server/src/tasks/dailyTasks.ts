@@ -18,6 +18,11 @@ export interface TaskRules {
   inviteNote: boolean;
   /** Übergabe an Close an (`CRM_HANDOVER`) – sonst keine Erinnerung „Termin noch nicht übergeben“. Fehlt = an. */
   handover?: boolean;
+  /**
+   * Gründer, deren Account gerade „nur von Hand“ vernetzt (Teammeeting 05.11.): keine Karten „Neuer Lead“ für sie – ihre
+   * neuen Leads füllen unter „Alle“ höchstens freie Plätze des anderen Gründers, sie selbst übernehmen keine.
+   */
+  manualInvites?: readonly AuthFounderId[];
 }
 
 /** Anteil der neuen Leads, der bewusst aus der mittleren Score-Stufe kommt. */
@@ -207,6 +212,8 @@ export function computeTasks(
         break;
       }
       case 'new': {
+        // Anfrage schon eingeplant (über den Tag verteilt, 05.11.) – nicht noch einmal vorschlagen.
+        if (lead.queuedInvite) break;
         const list = newLeads.get(lead.owner) ?? [];
         list.push(lead);
         newLeads.set(lead.owner, list);
@@ -236,7 +243,14 @@ export function computeTasks(
   const today = todayStart;
   const freeSlots = new Map<AuthFounderId, number>();
   const spare = new Map<AuthFounderId, CockpitLead[]>();
+  const manual = new Set(rules.manualInvites ?? []);
   for (const [founder, list] of newLeads) {
+    if (manual.has(founder)) {
+      // Vernetzt gerade nur von Hand (Sales Navigator): keine Vernetzen-Karten, die Leads warten (oder nutzt der andere).
+      freeSlots.set(founder, 0);
+      spare.set(founder, [...list]);
+      continue;
+    }
     // Nur Leads aus einer Suche von Hand – die automatische Suche (`origin.auto`) zählt gegen das Tageslimit.
     // Ebenso heute per Link aufgenommene Kontakte (noch nicht vernetzt).
     // Fällige Wiedervorlage ist wie frisch: immer dabei, über dem Tageslimit.
@@ -279,7 +293,7 @@ export function computeTasks(
     const overflow = (id: AuthFounderId) => Math.max(0, (invitesToday[id] ?? 0) - rules.newLeadsPerDay);
     for (const helper of founders) {
       // Ein Gründer ohne eigene neue Leads hat seine ganzen Plätze frei (abzüglich heute gesendeter Anfragen).
-      const own = freeSlots.get(helper) ?? Math.max(0, rules.newLeadsPerDay - (invitesToday[helper] ?? 0));
+      const own = manual.has(helper) ? 0 : (freeSlots.get(helper) ?? Math.max(0, rules.newLeadsPerDay - (invitesToday[helper] ?? 0)));
       const used = founders.filter((id) => id !== helper).reduce((sum, id) => sum + overflow(id), 0);
       freeSlots.set(helper, Math.max(0, own - used));
     }
@@ -306,10 +320,10 @@ export function computeTasks(
   }
 
   // Übernommene Leads (Account des Besitzers nicht verbunden): nur in freie Plätze, nach den eigenen.
-  if (owner && adopt.length) {
+  if (owner && adopt.length && !manual.has(owner)) {
     const ownPicked = byType.lead.length;
     const free = Math.max(0, rules.newLeadsPerDay - (invitesToday[owner] ?? 0) - ownPicked);
-    const open = adopt.filter((lead) => lead.stage === 'new' && lead.owner !== owner && (!lead.snoozedUntil || lead.snoozedUntil <= now));
+    const open = adopt.filter((lead) => lead.stage === 'new' && !lead.queuedInvite && lead.owner !== owner && (!lead.snoozedUntil || lead.snoozedUntil <= now));
     for (const { lead, exploration } of free > 0 ? pickNewLeads(open, free, todayStart) : []) {
       byType.lead.push({
         id: `${lead.id}:lead`,

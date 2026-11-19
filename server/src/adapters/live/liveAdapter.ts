@@ -646,8 +646,27 @@ export class LiveAdapter implements LeadSearchAdapter {
     return usable.id;
   }
 
-  /** Such-Accounts (`scrapeAccounts`/`searchAccounts`). Ohne startklaren Account wie früher der eine aus `account()`. */
+  /**
+   * Such-Accounts ohne die deaktivierten (Wunsch des Nutzers 03.11.: ein Klick, kein Traffic mehr über den Account –
+   * weder Suche noch Profile noch Firmenseiten). Wird bei jedem Aufruf frisch gefiltert, damit der Schalter sofort wirkt.
+   */
   private async pool(ctx: RunContext): Promise<{ scrape: string[]; search: string[] }> {
+    const all = await this.allAccounts(ctx);
+    const enabled = (list: string[]) => list.filter((id) => !this.prefs?.isDisabled(id));
+    const pool = { scrape: enabled(all.scrape), search: enabled(all.search) };
+    if (!pool.scrape.length || !pool.search.length) {
+      throw new AdapterError(
+        'config',
+        'Alle LinkedIn-Accounts deaktiviert',
+        'Jeder Account, über den gesucht werden könnte, ist unter Einstellungen → LinkedIn → Accounts deaktiviert. Schalte mindestens einen wieder ein, dann läuft die Suche weiter.',
+        true,
+      );
+    }
+    return pool;
+  }
+
+  /** Such-Accounts (`scrapeAccounts`/`searchAccounts`). Ohne startklaren Account wie früher der eine aus `account()`. */
+  private async allAccounts(ctx: RunContext): Promise<{ scrape: string[]; search: string[] }> {
     if (this.scrapePool && this.now() - this.scrapePool.at < SCRAPE_POOL_TTL_MS) return this.scrapePool;
     const { items } = await this.call(() => this.unipile.listAccounts(ctx.signal), 'setup');
     const ids = (accounts: UnipileAccount[]) => accounts.map((account) => account.id!);
@@ -791,18 +810,37 @@ export class LiveAdapter implements LeadSearchAdapter {
     return Object.values(this.options.founderAccounts ?? {}).filter((id): id is string => Boolean(id));
   }
 
+  /**
+   * Region nachschlagen – über den ersten Such-Account, der gerade geht (nie über einen deaktivierten, 03.11.). Fällt er
+   * aus (getrennt, Limit, keine Antwort – z. B. Nicks gesperrter Account, 05.11.), wird er wie bei der Suche pausiert und
+   * der nächste übernimmt; erst wenn keiner mehr geht, bricht der Lauf ab.
+   */
+  private async lookupParameters(region: string, type: 'REGION' | 'LOCATION', ctx: RunContext) {
+    let lastFailure: AdapterError | null = null;
+    for (const accountId of (await this.pool(ctx)).search) {
+      if (this.isSidelined(accountId)) continue;
+      try {
+        const { items } = await this.call(() => this.unipile.searchParameters({ accountId, type, keywords: region, limit: 5 }, ctx.signal), 'setup');
+        return items ?? [];
+      } catch (error) {
+        const failure = this.sideline(accountId, error);
+        if (!failure) throw error;
+        lastFailure = failure;
+      }
+    }
+    lastFailure ??= this.latestSidelined();
+    if (lastFailure) throw this.allDownError(lastFailure);
+    throw this.searchLimitError();
+  }
+
   private async location(region: string, ctx: RunContext): Promise<string> {
     if (this.options.locationId) return this.options.locationId;
     const key = `${this.options.searchApi}:${region.toLowerCase()}`;
     const cached = this.locations.get(key);
     if (cached) return cached;
-    const accountId = await this.account(ctx);
     const type = this.options.searchApi === 'sales_navigator' ? 'REGION' : 'LOCATION';
-    const { items } = await this.call(
-      () => this.unipile.searchParameters({ accountId, type, keywords: region, limit: 5 }, ctx.signal),
-      'setup',
-    );
-    const match = pickLocation(items ?? [], region);
+    const items = await this.lookupParameters(region, type, ctx);
+    const match = pickLocation(items, region);
     if (!match) {
       throw new AdapterError(
         'config',
@@ -1009,9 +1047,8 @@ export class LiveAdapter implements LeadSearchAdapter {
   private async subLocation(region: string, ctx: RunContext): Promise<string | null> {
     const key = `${this.options.searchApi}:${region.toLowerCase()}`;
     if (this.locations.has(key)) return this.locations.get(key) || null;
-    const accountId = await this.account(ctx);
     const type = this.options.searchApi === 'sales_navigator' ? 'REGION' : 'LOCATION';
-    const { items } = await this.call(() => this.unipile.searchParameters({ accountId, type, keywords: region, limit: 5 }, ctx.signal), 'setup');
+    const items = await this.lookupParameters(region, type, ctx);
     // Nur ein echter Treffer zählt (kein „erster Vorschlag“) – sonst sucht die Teilregion wieder im ganzen Land.
     const wanted = region.trim().toLowerCase();
     const match = (items ?? []).find((item) => (item.title ?? '').trim().toLowerCase().startsWith(wanted));
@@ -1031,6 +1068,7 @@ export class LiveAdapter implements LeadSearchAdapter {
     if (this.founderAccountIds().length) return new Set();
     const accountId = await this.account(ctx);
     const pending = new Set<string>();
+    if (this.prefs?.isDisabled(accountId)) return pending;
     let cursor: string | null | undefined;
     try {
       for (let page = 0; page < MAX_INVITATION_PAGES; page++) {
@@ -1079,7 +1117,8 @@ export class LiveAdapter implements LeadSearchAdapter {
       // Bei Unipile getrennt oder gestört (z. B. Nicks gesperrter Account, 17.10.): Entscheidung des Nutzers – trotzdem
       // weitermachen, das Risiko von Doppelten ist bewusst. Kein Abruf über den Account, Leads werden nicht zurückgestellt.
       // Ist er wieder verbunden, prüft der nächste Lauf seine Kontakte von selbst wieder.
-      const down = items && !listed ? 'bei Unipile nicht verbunden' : listed && !sourceOk(listed) ? `Status bei Unipile: ${(listed.sources ?? []).map((source) => source.status).filter(Boolean).join(', ')}` : null;
+      // Deaktiviert (03.11.): kein Traffic über den Account – wie „getrennt“ behandeln.
+      const down = this.prefs?.isDisabled(accountId) ? 'im Cockpit deaktiviert' : items && !listed ? 'bei Unipile nicht verbunden' : listed && !sourceOk(listed) ? `Status bei Unipile: ${(listed.sources ?? []).map((source) => source.status).filter(Boolean).join(', ')}` : null;
       if (down) {
         downNotes.push(
           `Die Kontakte von ${defaultFounderName(founder)} werden gerade nicht geprüft (Account ${down}). Die Suche läuft trotzdem weiter – Leads, die schon mit ${defaultFounderName(founder)} vernetzt sind, können doppelt auftauchen.`,
@@ -1098,6 +1137,15 @@ export class LiveAdapter implements LeadSearchAdapter {
           continue;
         } catch (failure) {
           if (failure instanceof CancelledError) throw failure;
+          // Zugang abgelehnt / Account bei Unipile getrennt (05.11.: Nicks gesperrter Account meldete sich noch als
+          // verbunden): wie „getrennt“ – weitermachen statt alle neuen Leads zurückzustellen (Entscheidung 17.10.).
+          const adapterFailure = failure instanceof AdapterError ? failure : toAdapterError(failure, 'setup');
+          if (adapterFailure instanceof AdapterError && adapterFailure.code === 'auth') {
+            downNotes.push(
+              `Die Kontakte von ${defaultFounderName(founder)} werden gerade nicht geprüft (Zugang bei Unipile abgelehnt – Account getrennt?). Die Suche läuft trotzdem weiter – Leads, die schon mit ${defaultFounderName(founder)} vernetzt sind, können doppelt auftauchen.`,
+            );
+            continue;
+          }
           error = networkErrorText(failure);
         }
       }
@@ -1178,7 +1226,7 @@ export class LiveAdapter implements LeadSearchAdapter {
       }
       // Ohne freien Account für die Firmenseite gar nicht erst das Profil lesen (02.11.) – sonst fehlte sie dem Lead.
       if (this.options.fetchCompany && !(await this.companyAccount(ctx, accountId))) throw this.companyLimitError();
-      this.usage.add(accountId, 'profile', 1, this.now());
+      this.usage.add(accountId, 'profile', 1, this.now(), isContactRun(ctx) ? 'contact_profile' : 'lead_profile');
       const using = accountId;
       try {
         profile = await this.call(() => this.unipile.getProfile({ accountId: using, identifier: hit.providerId }, ctx.signal), 'profile');
@@ -1202,7 +1250,7 @@ export class LiveAdapter implements LeadSearchAdapter {
       const companyAccount = await this.companyAccount(ctx);
       if (!companyAccount) throw companyFailure ? this.allDownError(companyFailure) : this.companyLimitError();
       await this.pause(COMPANY_PAUSE_MS, ctx.signal);
-      this.usage.add(companyAccount, 'profile', 1, this.now());
+      this.usage.add(companyAccount, 'profile', 1, this.now(), isContactRun(ctx) ? 'contact_company' : 'lead_company');
       try {
         const company = await this.call(() => this.unipile.getCompany({ accountId: companyAccount, identifier: companyId }, ctx.signal), 'company');
         companyDescription = company.description?.trim() || null;
@@ -1328,14 +1376,26 @@ export function toAdapterError(error: unknown, what: 'search' | 'profile' | 'com
   );
 }
 
+/** Neue Kontakte übernehmen (`linkedin/connections.ts`) statt Lead-Suche – nur fürs Protokoll der Abrufe. */
+export const CONTACT_RUN_PREFIX = 'neue-kontakte-';
+const isContactRun = (ctx: RunContext) => ctx.runId.startsWith(CONTACT_RUN_PREFIX);
+
 export function createLiveAdapter(
   config: Config,
-  overrides: { fetch?: typeof fetch; pause?: PauseFn; anthropicBaseURL?: string; metaBaseURL?: string; now?: () => Date; usage?: AccountUsage } = {},
+  overrides: { fetch?: typeof fetch; pause?: PauseFn; anthropicBaseURL?: string; random?: () => number; metaBaseURL?: string; now?: () => Date; usage?: AccountUsage } = {},
 ) {
   const unipile = new UnipileClient({ dsn: config.unipile.dsn ?? '', apiKey: config.unipile.apiKey ?? '', fetch: overrides.fetch, onlyAccounts: () => usedAccountIds(config) });
   // Ohne Anthropic-Schlüssel läuft die Suche trotzdem – die Leads bleiben dann „nicht bewertet“.
   const qualifier = config.anthropic.apiKey
-    ? new AnthropicQualifier({ apiKey: config.anthropic.apiKey, model: config.anthropic.model, baseURL: overrides.anthropicBaseURL })
+    ? new AnthropicQualifier({
+        apiKey: config.anthropic.apiKey,
+        model: config.anthropic.model,
+        prescreenModel: config.anthropic.prescreenModel,
+        shadowModel: config.anthropic.shadowModel,
+        shadowPercent: config.anthropic.shadowPercent,
+        random: overrides.random,
+        baseURL: overrides.anthropicBaseURL,
+      })
     : null;
   // Ohne Meta-Token bleiben qualifizierte Leads „Meta-Ads nicht geprüft“.
   const adsChecker = config.meta.accessToken

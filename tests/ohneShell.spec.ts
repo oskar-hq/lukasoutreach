@@ -78,6 +78,16 @@ test('LinkedIn einrichten: Accounts laden und zuordnen, Test-LinkedIn-Account mi
   await scraperRow.getByTestId('linkedin-limit-invitesPerDay').fill('');
   await scraperRow.getByTestId('linkedin-limits-save').click();
   await expect(scraperRow.getByTestId('linkedin-limits-toggle')).toContainText('17 Anfragen');
+  // Deaktivieren (03.11.): ein Klick, kein Traffic mehr über den Account – Grenzen bleiben, wieder einschalten geht.
+  await scraperRow.getByTestId('linkedin-disable').click();
+  await expect(scraperRow.getByTestId('linkedin-disable')).toHaveAttribute('aria-pressed', 'true');
+  await expect(scraperRow.getByTestId('linkedin-disable')).toHaveText('Einschalten');
+  await expect(scraperRow.getByTestId('linkedin-disabled-note')).toContainText('keine Suche, keine Profile, keine Firmenseiten');
+  await accounts.getByTestId('linkedin-accounts-load').click();
+  await expect(scraperRow.getByTestId('linkedin-disable')).toHaveAttribute('aria-pressed', 'true');
+  await scraperRow.getByTestId('linkedin-disable').click();
+  await expect(scraperRow.getByTestId('linkedin-disable')).toHaveText('Deaktivieren');
+  await expect(scraperRow.getByTestId('linkedin-disabled-note')).toHaveCount(0);
   await expect(nickRow.getByTestId('linkedin-assign-nick')).toHaveAttribute('aria-pressed', 'true');
   // Wechselt der Account zu Johannes, verliert Nick ihn (ein Account gehört nur einem Gründer).
   await nickRow.getByTestId('linkedin-assign-johannes').click();

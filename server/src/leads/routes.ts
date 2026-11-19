@@ -22,7 +22,8 @@ import {
 import type { EnrichmentErrorCode } from '../../../shared/enrichment.js';
 import type { SettingsErrorCode } from '../../../shared/settings.js';
 import type { ApiErrorBody } from '../../../shared/leadSearch.js';
-import { LEAD_FEEDBACK_NOTE_MAX, LEAD_FEEDBACK_REASONS, type LearningSummary } from '../../../shared/learning.js';
+import { LEAD_FEEDBACK_NOTE_MAX, LEAD_FEEDBACK_REASONS, LEARNING_REPORT_DAYS_DEFAULT, LEARNING_REPORT_DAYS_MAX, type LearningSummary } from '../../../shared/learning.js';
+import { InsightsStore, buildReport, dayFormatter } from '../learning/insights.js';
 import { InviteLimiter } from '../auth/rateLimit.js';
 import { actorFor, assistantDenial, type FounderNameOf } from '../auth/roles.js';
 import { leadDistributionPool, type Config } from '../config.js';
@@ -35,6 +36,7 @@ import { FounderAccounts } from '../linkedin/founderAccounts.js';
 import type { AccountPrefsStore } from '../linkedin/accountPrefs.js';
 import { founderInviteLimits } from '../linkedin/accountPrefs.js';
 import { accountHasRoom, inviteAccountFor, otherFounder, type InviteCounts, type InviteLimits } from '../linkedin/inviteAccount.js';
+import { recordManualInvite } from '../linkedin/connections.js';
 import { ACCOUNT_PAUSED_MESSAGE, TASK_TYPES, type TasksResponse } from '../../../shared/tasks.js';
 import { computeTasks } from '../tasks/dailyTasks.js';
 import { hasDangerousScheme, safeWebUrl } from './webUrl.js';
@@ -142,6 +144,7 @@ const ActionSchema = z.object({
   label: text(40).optional(),
   at: z.number().int().positive().optional(),
   clientId: z.string().trim().min(1).max(64).optional(),
+  manual: z.boolean().optional(),
 });
 
 const SnoozeSchema = z.object({ until: z.number().int().positive().optional() });
@@ -254,7 +257,21 @@ export function registerLeadRoutes(
 ) {
   // LEAD_DISTRIBUTION=balanced: neue Leads (auch der automatischen Suche, die diesen Store nutzt) auf beide Gründer
   // verteilen – Regel in LeadStore.createFromCards.
-  const store = new LeadStore(db, { ownerPool: () => leadDistributionPool(config) });
+  /** Gründer, deren Account gerade „nur von Hand“ vernetzt (05.11.) – sie bekommen keine Vernetzen-Karten und keine verteilten Leads. */
+  const manualInvites = (now = Date.now()): AuthFounderId[] =>
+    AUTH_FOUNDER_IDS.filter((founder) => {
+      const accountId = config.linkedin.accounts[founder] ?? (config.mode === 'mock' ? `mock-${founder}` : null);
+      return !!accountId && !!accountPrefs && accountPrefs.inviteMode(accountId, now, config.linkedin.inviteMode).mode === 'manual';
+    });
+  const store = new LeadStore(db, {
+    ownerPool: () => leadDistributionPool(config),
+    // Verteilt wird nur an Gründer, die über das Cockpit vernetzen; vernetzen beide von Hand, wie bisher.
+    onlyOwner: () => {
+      const pool = leadDistributionPool(config);
+      const rest = pool.filter((founder) => !manualInvites().includes(founder));
+      return pool.length >= 2 && rest.length === 1 ? rest[0] : null;
+    },
+  });
 
   // Mitarbeiter buchen nur auf Leads ihres Gründers (Vertrag „Rollen und Rechte“): jede schreibende Route unter
   // `/api/leads/:id…` – auch die LinkedIn-Routen, die später registriert werden. Lesen bleibt erlaubt.
@@ -372,7 +389,7 @@ export function registerLeadRoutes(
     // Nie mehr neue Leads, als der eigene Account heute vernetzen darf (25.10.): Bei „Neue Leads pro Tag“ über dem
     // Anfragen-Limit standen sonst Karten im Stapel, die nur noch „Tageslimit erreicht“ sagen konnten.
     const perAccount = Math.min(config.tasks.newLeadsPerDay, inviteLimits().perDayFor?.[owner] ?? config.linkedin.invitesPerDay);
-    const rules = { ...config.tasks, newLeadsPerDay: perAccount, handover: config.close.handover };
+    const rules = { ...config.tasks, newLeadsPerDay: perAccount, handover: config.close.handover, manualInvites: manualInvites(now) };
     const sent = { [owner]: store.invitesSince(today)[owner] ?? 0 };
     const paused = AUTH_FOUNDER_IDS.filter((id) => id !== owner && !available[id]);
     const adopt = adoptPaused && paused.length ? store.list({ stages: ['new'], limit: 100_000 }).leads.filter((lead) => paused.includes(lead.owner)) : [];
@@ -419,7 +436,12 @@ export function registerLeadRoutes(
         const tasks = computeTasks(
           open,
           null,
-          { ...config.tasks, newLeadsPerDay: Math.min(config.tasks.newLeadsPerDay, config.linkedin.invitesPerDay), handover: config.close.handover },
+          {
+            ...config.tasks,
+            newLeadsPerDay: Math.min(config.tasks.newLeadsPerDay, config.linkedin.invitesPerDay),
+            handover: config.close.handover,
+            manualInvites: manualInvites(now),
+          },
           now,
           store.invitesSince(today),
           today,
@@ -455,7 +477,7 @@ export function registerLeadRoutes(
     if (!owner) {
       // Nur die offenen Leads dieses Gründers laden (ohne owner: alle).
       const open = store.list({ stages: [...OPEN_STAGES], limit: 100_000 }).leads;
-      const tasks = computeTasks(open, owner, { ...config.tasks, handover: config.close.handover }, now, store.invitesSince(today), today, store.meetingsBookedAt(owner));
+      const tasks = computeTasks(open, owner, { ...config.tasks, handover: config.close.handover, manualInvites: manualInvites(now) }, now, store.invitesSince(today), today, store.meetingsBookedAt(owner));
       return { ...tasks, rules: { ...tasks.rules, invitesPerDay: config.linkedin.invitesPerDay } };
     }
     if (!available[owner]) return pausedStack(owner, paused, now);
@@ -486,10 +508,56 @@ export function registerLeadRoutes(
   });
 
   // Was der Scraper aus Rückmeldungen gelernt hat (Vertrag shared/learning.ts). Trägt vorher neue Ergebnisse nach.
+  const insights = new InsightsStore(db);
+  const dayOf = dayFormatter(config.linkedin.workHours.timeZone);
   app.get('/api/learning', async (): Promise<LearningSummary> => {
     const now = Date.now();
     store.syncLearning(now);
-    return store.learning.summary(now);
+    return store.learning.summary(now, insights.efficiency(30, dayOf));
+  });
+
+  // Optimierungs-Bericht als Markdown-Datei (Vertrag shared/learning.ts, Wunsch des Nutzers 09.11.).
+  app.get('/api/learning/report', async (request, reply) => {
+    const parsed = z
+      .object({ days: z.coerce.number().int().min(1).max(LEARNING_REPORT_DAYS_MAX).default(LEARNING_REPORT_DAYS_DEFAULT) })
+      .safeParse(request.query);
+    if (!parsed.success) return sendError(reply, 400, 'invalid_request', issues(parsed.error));
+    const now = Date.now();
+    store.syncLearning(now);
+    const { anthropic } = config;
+    const accounts = config.linkedin.accounts;
+    const accountName = (id: string) => {
+      const founder = (Object.keys(accounts) as AuthFounderId[]).find((key) => accounts[key] === id);
+      if (founder) return `${founderName ? founderName(founder) : founder} (Gründer) · ${id}`;
+      return config.linkedin.warmupAccounts.includes(id) ? `Scraping-Account (aufwärmen) · ${id}` : `Scraping-Account · ${id}`;
+    };
+    const markdown = buildReport(db, {
+      now,
+      days: parsed.data.days,
+      timeZone: config.linkedin.workHours.timeZone,
+      usdToEur: anthropic.usdToEur,
+      mode: config.mode,
+      accountName,
+      efficiency: insights.efficiency(parsed.data.days, dayOf),
+      settings: [
+        ['Modell Einstufung (und Texte, Antworten, Assistent)', anthropic.model],
+        ['Modell Vorprüfung', anthropic.prescreenModel],
+        ['Vergleichsmodell Einstufung', anthropic.shadowModel],
+        ['Anteil Modellvergleich', `${anthropic.shadowPercent} %`],
+        ['Mindestsicherheit der KI', String(config.minConfidence)],
+        ['Max. Profile pro Lauf', String(config.maxResults)],
+        ['Suchtreffer pro Lauf', String(config.searchHits)],
+        ['Ohne KI qualifizieren bei', config.autoQualifyTerms.join(', ') || 'aus'],
+        ['Such-API', config.unipile.searchApi],
+        ['Firmenseite abrufen', config.unipile.fetchCompany ? 'ja' : 'nein'],
+      ],
+    });
+    const file = `optimierungs-bericht-${dayOf(now)}.md`;
+    return reply
+      .header('content-type', 'text/markdown; charset=utf-8')
+      .header('content-disposition', `attachment; filename="${file}"`)
+      .header('cache-control', 'no-store')
+      .send(markdown);
   });
 
   // Eigene Spalten im Board (Vertrag shared/leads.ts → BoardColumn).
@@ -691,7 +759,19 @@ export function registerLeadRoutes(
       // Über den Account des anderen Gründers: vor der Buchung merken – Erstnachricht und Follow-ups laufen dann ebenso,
       // und der Verlauf nennt den Account (ohne „über LinkedIn“ – eingetragen ist nicht gesendet).
       if (lead && account && account !== (lead.linkedin?.sentBy ?? lead.owner)) store.setLinkedInAccount(lead.id, account);
-      store.applyAction(params.data.id, parsed.data, by, Date.now(), undefined, actorFor(request.authUser, by));
+      // „Manuell vernetzt“ (09.11.): von Hand auf LinkedIn gesendet – im Verlauf so benannt und in der Statistik „von Hand“.
+      const manualInvite = parsed.data.manual === true && parsed.data.action === 'invite_sent';
+      const now = Date.now();
+      const booked = store.applyAction(
+        params.data.id,
+        parsed.data,
+        by,
+        now,
+        undefined,
+        actorFor(request.authUser, by),
+        manualInvite ? 'Vernetzungsanfrage gesendet · von Hand auf LinkedIn' : undefined,
+      );
+      if (manualInvite) recordManualInvite(db, booked.linkedin?.sentBy ?? booked.owner, booked, parsed.data.at ?? now);
     } catch (error) {
       if (error instanceof DuplicateEventError) return { ...detail(params.data.id)!, duplicate: true };
       if (error instanceof LeadNotFoundError) return sendError(reply, 404, 'not_found', error.message);

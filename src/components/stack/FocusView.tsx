@@ -31,6 +31,7 @@ import { SwipeContext, type SwipeActions } from './swipe';
 import { SuccessScreen } from './SuccessScreen';
 import { TYPE_LABELS, TYPE_ORDER } from './summary';
 import { EASE_OUT, SPRING_MENU, SPRING_PAGE } from '../../lib/motion';
+import * as telemetry from '../../lib/telemetry';
 
 const CARD_COMPONENTS: Record<CardType, ComponentType<CardProps>> = {
   reply: ReplyCard,
@@ -121,6 +122,8 @@ function SwipeablePage({ card, transition, onSwipeCommit, onSwipeCancel, childre
     if (Math.abs(projected) > SWIPE_COMMIT && Math.abs(offset) > SWIPE_MIN_TRAVEL && action && action.enabled !== false) {
       onSwipeCommit(info.velocity.x);
       if (action.run() !== false) {
+        // Nutzungsdaten: Ausgang der Karte – die nächste Karte meldet sich erst nach dem Neuzeichnen.
+        telemetry.trackCardOutcome(projected > 0 ? 'Wischen rechts' : 'Wischen links');
         haptic();
         return;
       }
@@ -175,6 +178,11 @@ export function FocusView() {
   // Nachrichten über den, über den die Anfrage ging (`sentBy`, 25.10.) – sonst zeigte die Karte „Senden“, wo der Server
   // ablehnt, oder „eintragen“, wo er senden könnte.
   const currentLead = current ? state.stack.tasks[current.id]?.lead : undefined;
+  // Nutzungsdaten (09.11.): Zeit je Karte und womit sie endete (lib/telemetry.ts).
+  useEffect(() => {
+    telemetry.setCard(current ? { id: current.id, type: current.type } : null);
+  }, [current?.id, current?.type]);
+  useEffect(() => () => telemetry.setCard(null), []);
   const mode = useActionMode(current && currentLead && current.type !== 'lead' ? messageAccount(currentLead) : current?.owner);
   const doneCount = all.length - pendingAll.length;
   const remaining = remainingTime(all, pendingAll.length);

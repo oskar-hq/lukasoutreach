@@ -8,6 +8,7 @@ import { useHotkeys } from '../../lib/useHotkeys';
 import { MESSAGE_TEXT_LIMIT } from '../../state/cockpit';
 import { shortTemplateName, useTemplates } from '../../state/templates';
 import { templateLetter, templateSegmentOf } from '../../../shared/messages';
+import { MESSAGE_WITHOUT_TEXT } from '../../../shared/leads';
 import { MoreTemplates, TABBED_TEMPLATES } from './MoreTemplates';
 import { Button } from '../ui/Button';
 import { Segmented } from '../ui/Segmented';
@@ -112,6 +113,16 @@ function FollowUpReady({ card, onDecide, onOpenLead, hotkeysEnabled }: CardProps
   };
 
   const skip = () => onDecide({ decision: 'skip', positive: false, action: null, toast: SKIP_TOAST });
+
+  // Follow-up schon auf LinkedIn geschickt, z. B. als Sticker (Wunsch des Nutzers 09.11.): nur eintragen – zählt als
+  // Follow-up, steht im Chat als „Sticker oder Anhang“, und das nächste kommt erst nach der Wartezeit.
+  const sentElsewhere = () =>
+    onDecide({
+      decision: 'send',
+      positive: true,
+      action: { action: 'message_sent', text: MESSAGE_WITHOUT_TEXT, manual: true },
+      toast: { pending: `Follow-up ${stage} wird eingetragen`, done: `Follow-up ${stage} eingetragen`, short: { pending: 'Wird eingetragen', done: 'Eingetragen' } },
+    });
 
   useHotkeys(
     {
@@ -251,6 +262,16 @@ function FollowUpReady({ card, onDecide, onOpenLead, hotkeysEnabled }: CardProps
             {blocked}
           </p>
         )}
+      </div>
+      <div className="mt-6 flex justify-center">
+        <button
+          type="button"
+          onClick={sentElsewhere}
+          className="inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[13px] text-ink-3 transition-colors hover:bg-surface-3 hover:text-ink-2"
+          data-testid="followup-sent-elsewhere"
+        >
+          Follow-up getätigt (z. B. Sticker auf LinkedIn)
+        </button>
       </div>
       <LogReply lead={lead} onDecide={onDecide} hotkeysEnabled={hotkeysEnabled && present} />
     </FocusPage>

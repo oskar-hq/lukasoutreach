@@ -213,7 +213,22 @@ export function loadDashboard(
         WHERE (stage IN ('replied', 'meeting', 'handed_over') OR board_column IS NOT NULL) AND last_activity_at >= ?`,
     )
     .all(since) as unknown as DashboardReplyLead[];
-  const dashboard = computeDashboard([...rows, ...archived], pipelineRows, options, replyLeads);
+  // Anfragen von Hand auf LinkedIn (05.11.), aus denen (noch) kein Lead wurde: zählen als Anfrage (und ggf. Annahme) im
+  // Dashboard mit – mit Lead stehen sie schon als „Anfrage gesendet“/„angenommen“ in dessen Verlauf.
+  const manual = (
+    db
+      .prepare(
+        `SELECT 'hand:' || s.founder || ':' || s.person_key AS lead_id, s.founder AS owner, s.sent_at, s.accepted_at
+           FROM linkedin_sent_invites s
+          WHERE s.source = 'manual' AND s.sent_at >= ?
+            AND (s.lead_id IS NULL OR NOT EXISTS (SELECT 1 FROM leads l WHERE l.id = s.lead_id))`,
+      )
+      .all(since) as { lead_id: string; owner: string; sent_at: number; accepted_at: number | null }[]
+  ).flatMap((row): DashboardEventRow[] => [
+    { lead_id: row.lead_id, owner: row.owner, template: null, kind: 'invite_sent', at: row.sent_at, label: null },
+    ...(row.accepted_at ? [{ lead_id: row.lead_id, owner: row.owner, template: null, kind: 'invite_accepted', at: row.accepted_at, label: null }] : []),
+  ]);
+  const dashboard = computeDashboard([...rows, ...archived, ...manual], pipelineRows, options, replyLeads);
   // KI-Kosten (11.10.): für beide Gründer zusammen, gegen den offenen Deal Value.
   dashboard.aiCost = aiCostSummary(db, {
     from: dashboard.from,

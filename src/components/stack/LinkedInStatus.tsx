@@ -13,6 +13,7 @@ import type { CardType, FounderId } from '../../state/types';
 import { useSendState } from './actionMode';
 import { Disclosure } from '../ui/Disclosure';
 import { StatusLine } from '../ui/Status';
+import { InviteToday } from './InviteToday';
 
 const count = (limit: LinkedInLimit, one: string, many: string) => (
   <span className={cn('tabular-nums', limit.used >= limit.limit && 'text-ink')}>
@@ -75,6 +76,7 @@ export function LinkedInStatus({ details }: { details?: ReactNode }) {
     const known = invitesToday !== null && newLeadsPerDay !== null;
     return (
       <div className="flex max-w-[440px] flex-col items-center gap-1.5 text-[13px] leading-[1.55] text-ink-3">
+        <InviteToday account={account} />
         {known && (switching ? nextVia === null : invitesToday >= newLeadsPerDay) && (
           <StatusLine role="status" testId="invites-limit">
             {invitesToday >= newLeadsPerDay
@@ -109,6 +111,7 @@ export function LinkedInStatus({ details }: { details?: ReactNode }) {
 
   return (
     <div className="flex max-w-[480px] flex-col items-center gap-1.5 text-[13px] leading-[1.55] text-ink-3" data-testid="linkedin-status">
+      <InviteToday account={account} />
       {blocks.map((block) => (
         <StatusLine key={block} role="status">
           {block}

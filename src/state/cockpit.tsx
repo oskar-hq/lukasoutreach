@@ -536,11 +536,11 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
             const current = await leadsApi.get(task.lead.id, { signal });
             if (alreadySent(task, request, current.lead)) return current;
           }
-          if (args.viaLinkedIn && request.action === 'invite_sent') {
+          if (args.viaLinkedIn && !request.manual && request.action === 'invite_sent') {
             const body = request.text ? { message: request.text, clientId } : { clientId };
             return linkedinApi.invite(task.lead.id, body, { keepalive, signal });
           }
-          if (args.viaLinkedIn && request.action === 'message_sent' && request.text) {
+          if (args.viaLinkedIn && !request.manual && request.action === 'message_sent' && request.text) {
             return linkedinApi.message(task.lead.id, { text: request.text, label: request.label, clientId }, { keepalive, signal });
           }
           if (args.viaCrm && request.action === 'handed_over') {

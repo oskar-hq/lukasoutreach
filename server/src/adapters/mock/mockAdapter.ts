@@ -1,5 +1,6 @@
+import { recordShadow } from '../../ai/shadow.js';
 import { recordAiUsage } from '../../ai/usage.js';
-import type { EnrichedProfile, MetaAdsCheck, PrescreenVerdict, SearchHit, SearchProfile } from '../../../../shared/leadSearch.js';
+import { isQualifyingCategory, type EnrichedProfile, type MetaAdsCheck, type PrescreenVerdict, type SearchHit, type SearchProfile } from '../../../../shared/leadSearch.js';
 import { companySearchTerm, evaluateAds, isoDay, uncheckedAds, type ArchivedAd } from '../../ads/metaAds.js';
 import { randomBetween, sleep } from '../../lib/sleep.js';
 import type { AuthFounderId } from '../../../../shared/auth.js';
@@ -163,6 +164,22 @@ export class MockAdapter implements LeadSearchAdapter {
     const lead = MOCK_LEADS_BY_ID.get(hit.providerId);
     if (!lead) throw new AdapterError('provider', 'Keine Einschätzung', 'Keine Einschätzung möglich', false);
     recordAiUsage('qualify', MOCK_AI_MODEL, { input_tokens: 2_500, output_tokens: 400 }, ctx.runId);
+    // Modellvergleich (09.11.) für den Optimierungs-Bericht: gleiches Urteil, ohne zusätzliche Kosten (Zahlen bleiben stabil).
+    const verdict = lead.ai.qualified && isQualifyingCategory(lead.ai.category) ? 'ja' : 'nein';
+    recordShadow({
+      purpose: 'qualify',
+      providerId: hit.providerId,
+      runId: ctx.runId,
+      headline: hit.headline || null,
+      mainModel: MOCK_AI_MODEL,
+      mainVerdict: verdict,
+      mainCategory: lead.ai.category,
+      mainConfidence: lead.ai.confidence,
+      shadowModel: 'claude-haiku-5-5',
+      shadowVerdict: verdict,
+      shadowCategory: lead.ai.category,
+      shadowConfidence: lead.ai.confidence,
+    });
     // Simulierte Modellausgabe – Validierung und strenge Regel folgen im Runner.
     return structuredClone(lead.ai);
   }

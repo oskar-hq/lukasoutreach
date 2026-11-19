@@ -110,8 +110,9 @@ export function linkedInBlock(
     const until = new Date(account.pausedUntil).toLocaleString('de-DE', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
     return `LinkedIn ist pausiert bis ${until} Uhr.${account.pauseReason ? ` ${account.pauseReason}` : ''}`;
   }
-  if (!status.withinWorkHours) return `Gesendet wird nur zu Arbeitszeiten (${workHoursText(status)}).`;
   if (kind === 'invite') {
+    // Arbeitszeit nur für Anfragen (07.11.) – Nachrichten gehen jederzeit raus.
+    if (!status.withinWorkHours) return `Vernetzungsanfragen gehen nur zu Arbeitszeiten raus (${workHoursText(status)}).`;
     if (inviteVia && inviteVia !== account.founder) return null;
     if (account.invitesToday.used >= account.invitesToday.limit) return `Tageslimit für Vernetzungsanfragen erreicht (${account.invitesToday.limit}) – morgen geht es weiter.`;
     if (account.invitesWeek.used >= account.invitesWeek.limit) return `Wochenlimit für Vernetzungsanfragen erreicht (${account.invitesWeek.limit} in 7 Tagen).`;

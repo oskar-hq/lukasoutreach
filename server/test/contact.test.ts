@@ -46,8 +46,18 @@ test('Kontakt per Link: ein Profilabruf über den Account des Besitzers, 1. Grad
   const detail = (await server.inject({ method: 'GET', url: `/api/leads/${lead.id}` })).json() as LeadDetailResponse;
   assert.deepEqual(
     detail.events.map((event) => [event.kind, event.title]),
-    [['created', 'Persönlicher Kontakt – per LinkedIn-Link aufgenommen · Vernetzt']],
+    [
+      ['created', 'Persönlicher Kontakt – per LinkedIn-Link aufgenommen · Vernetzt'],
+      // Feedback #1 (11.11.): zählt als Vernetzung von Hand.
+      ['invite_sent', 'Vernetzungsanfrage gesendet · von Hand auf LinkedIn'],
+      ['invite_accepted', 'Vernetzt · per LinkedIn-Link eingetragen'],
+    ],
   );
+  const stats = (await server.inject({ method: 'GET', url: '/api/linkedin/invite-stats?days=1' })).json() as {
+    founders: { founder: string; sent: number; sentManual: number; acceptedOfSent: number }[];
+  };
+  const nick = stats.founders.find((entry) => entry.founder === 'nick')!;
+  assert.deepEqual([nick.sent, nick.sentManual, nick.acceptedOfSent], [1, 1, 1], 'Dashboard → Vernetzen: von Hand, angenommen');
 
   const tasks = (await server.inject({ method: 'GET', url: '/api/tasks?owner=nick' })).json() as TasksResponse;
   assert.ok(tasks.tasks.some((task) => task.type === 'first' && task.lead.id === lead.id), 'Erstnachricht fällig');
@@ -143,4 +153,33 @@ test('Kontakt per Link in der Simulation: Name aus dem Link, 1. Grad', async () 
   const { lead } = response.json() as AddContactResponse;
   assert.deepEqual([lead.person.firstName, lead.person.lastName, lead.stage, lead.owner], ['Anna', 'Berg', 'replied', 'johannes']);
   assert.equal(response.json().importedMessages, 2);
+});
+
+test('Migration 55 (Feedback #1): vorher per Link eingetragene Kontakte zählen nachträglich als Vernetzung von Hand', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const path = await import('node:path');
+  const { migrate, DATABASE_FILE } = await import('../src/db/database.js');
+  const dataDir = tempDataDir();
+  const server = app({ DATA_DIR: dataDir });
+  await server.ready();
+  const added = (await add(server, { profile: 'https://www.linkedin.com/in/alt-kontakt', owner: 'johannes' })).json() as AddContactResponse;
+  await server.close();
+  // Zustand wie vor dem Update: nur „angelegt“, keine Anfrage, nichts gemerkt.
+  const db = new DatabaseSync(path.join(dataDir, DATABASE_FILE));
+  db.prepare("DELETE FROM lead_events WHERE lead_id = ? AND kind IN ('invite_sent', 'invite_accepted')").run(added.lead.id);
+  db.prepare('DELETE FROM linkedin_sent_invites').run();
+  db.exec('PRAGMA user_version = 54');
+  migrate(db);
+  migrate(db); // zweimal: nichts doppelt
+  const kinds = (db.prepare("SELECT kind FROM lead_events WHERE lead_id = ? AND kind IN ('created', 'invite_sent', 'invite_accepted') ORDER BY at, kind").all(added.lead.id) as { kind: string }[]).map((row) => row.kind);
+  assert.deepEqual(kinds, ['created', 'invite_sent', 'invite_accepted']);
+  const sent = db.prepare('SELECT founder, source, accepted_at IS NOT NULL AS accepted, lead_id FROM linkedin_sent_invites').all() as { founder: string; source: string; accepted: number; lead_id: string }[];
+  assert.deepEqual(sent.map((row) => [row.founder, row.source, row.accepted, row.lead_id]), [['johannes', 'logged', 1, added.lead.id]]);
+  db.close();
+
+  // Das Dashboard (Überblick) zählt die Anfrage und die Annahme.
+  const again = app({ DATA_DIR: dataDir });
+  const dashboard = (await again.inject({ method: 'GET', url: '/api/dashboard?days=7' })).json() as { kpis?: unknown };
+  assert.match(JSON.stringify(dashboard), /"requests":1/);
+  await again.close();
 });

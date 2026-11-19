@@ -13,7 +13,8 @@ test('Migration 45 (28.10.): gespeicherte Zeitpläne mit Bauträger-Stichwörter
   const own = { keywords: ['Allfinanz', 'Kapitalanlage'], positions: ['CEO'], region: 'Deutschland', maxResults: 10 };
   insert.run('nick', '[1]', '07:00', JSON.stringify(old));
   insert.run('johannes', '[1]', '07:00', JSON.stringify(own));
-  migrate(db);
+  // Nur bis 45 – spätere Migrationen (z. B. neue Spalten) liefen schon beim Öffnen.
+  migrate(db, 45);
   const profile = (founder: string) => JSON.parse((db.prepare('SELECT profile FROM auto_search_schedules WHERE founder = ?').get(founder) as { profile: string }).profile);
   assert.deepEqual(profile('nick'), { ...old, keywords: [...DEFAULT_SEARCH_PROFILE.keywords] }, 'nur die Stichwörter ändern sich');
   assert.deepEqual(profile('johannes'), own, 'ohne Bauträger-Begriffe bleibt alles');

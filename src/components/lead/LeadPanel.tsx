@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type MutableRefObject, type PointerEvent a
 import { createPortal } from 'react-dom';
 import { type CockpitLead, type LeadEventKind } from '../../../shared/leads';
 import { LEAD_TYPE_LABELS } from '../../../shared/scoring';
-import { ApiError, leadsApi } from '../../lib/leadSearchApi';
+import { ApiError, leadsApi, linkedinApi } from '../../lib/leadSearchApi';
 import { metaLibraryIsPage, metaLibraryUrl, readableError } from '../../lib/leadView';
 import { FOUNDERS } from '../../data/founders';
 import { cn } from '../../lib/cn';
@@ -580,6 +580,7 @@ function StatusCard({ lead, events, locked, readOnly }: { lead: CockpitLead; eve
       </div>
       <p className="mt-2.5 text-[13px] leading-[1.4] text-ink-2">{view.hint}</p>
       {!readOnly && <SnoozedLine lead={lead} disabled={locked} />}
+      {!readOnly && <QueuedInviteLine lead={lead} disabled={locked} />}
       {locked && (
         <p role="status" className="mt-2 text-[12.5px] text-ink-3" data-testid="actions-locked">
           Wartet, bis die letzte Entscheidung gespeichert ist.
@@ -810,6 +811,46 @@ function SnoozedLine({ lead, disabled }: { lead: CockpitLead; disabled: boolean 
         data-testid="panel-unsnooze"
       >
         {busy ? 'Wird zurückgeholt …' : 'Zurück in den Tagesstapel'}
+      </button>
+      {error && <span className="w-full text-bad">{error}</span>}
+    </p>
+  );
+}
+
+/**
+ * Eingeplante Vernetzungsanfrage (Teammeeting 05.11., „über den Tag verteilt“): wann sie rausgeht, und zurücknehmen –
+ * dann steht der Lead wieder im Tagesstapel.
+ */
+function QueuedInviteLine({ lead, disabled }: { lead: CockpitLead; disabled: boolean }) {
+  const { mutateLead } = useCockpit();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!lead.queuedInvite || lead.stage !== 'new') return null;
+  const cancel = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await mutateLead(() => linkedinApi.cancelInvite(lead.id), lead.id);
+    } catch (caught) {
+      setError(caught instanceof ApiError ? readableError(caught, 'Das Backend hat es nicht angenommen.') : 'Backend nicht erreichbar.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <p className="mt-2.5 flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-white/[0.06] pt-2.5 text-[13px] text-ink-2" data-testid="panel-queued-invite">
+      <span className="inline-flex items-baseline gap-1.5">
+        <Dot tone="good" />
+        Anfrage eingeplant für {lowerFirst(formatDateTime(lead.queuedInvite.at))}
+      </span>
+      <button
+        type="button"
+        onClick={() => void cancel()}
+        disabled={busy || disabled}
+        className="font-semibold text-ink underline-offset-4 hover:underline disabled:opacity-40"
+        data-testid="panel-cancel-invite"
+      >
+        {busy ? 'Wird zurückgenommen …' : 'Zurücknehmen'}
       </button>
       {error && <span className="w-full text-bad">{error}</span>}
     </p>

@@ -38,7 +38,8 @@ import type { AuthFounderId } from './auth.js';
  * Nur Gründer und Admins (`audience: 'managers'`). „Nicht erreichbar“ erst nach zwei Prüfungen in Folge. Verschwindet,
  * sobald die Prüfung wieder klappt oder sie aus ist (Simulation, Token entfernt).
  */
-export const NOTIFICATION_KINDS = ['registration', 'search_failed', 'linkedin_paused', 'backup_failed', 'update_failed', 'account_change', 'disk_low', 'unipile_down'] as const;
+/** `feedback` (09.11.): neue Meldung eingegangen bzw. Stand einer eigenen Meldung geändert (`shared/feedback.ts`). */
+export const NOTIFICATION_KINDS = ['registration', 'search_failed', 'linkedin_paused', 'backup_failed', 'update_failed', 'account_change', 'disk_low', 'unipile_down', 'feedback'] as const;
 
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
@@ -46,7 +47,13 @@ export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 export type NotificationSeverity = 'info' | 'warning' | 'error';
 
 /** Wohin ein Klick auf die Meldung führt. `section` = Bereich der Einstellungen (`settingsNav.ts`). */
-export type NotificationTarget = { view: 'accounts' } | { view: 'search' } | { view: 'home' } | { view: 'settings'; section?: string };
+export type NotificationTarget =
+  | { view: 'accounts' }
+  | { view: 'search' }
+  | { view: 'home' }
+  | { view: 'settings'; section?: string }
+  /** Feedback-Fenster öffnen (09.11.). */
+  | { view: 'feedback' };
 
 export interface AppNotification {
   id: string;

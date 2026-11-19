@@ -85,7 +85,11 @@ export interface DashboardResponse {
 }
 
 /** Wofür die KI aufgerufen wurde. */
-export const AI_PURPOSES = ['prescreen', 'qualify', 'suggest', 'conversation', 'assistant'] as const;
+/**
+ * `shadow` (09.11.): Modellvergleich – ein Teil der Vorprüfungen und Einstufungen geht zusätzlich an ein zweites Modell
+ * (`AI_SHADOW_PERCENT`), das Ergebnis zählt nicht, nur der Vergleich im Optimierungs-Bericht.
+ */
+export const AI_PURPOSES = ['prescreen', 'qualify', 'suggest', 'conversation', 'assistant', 'shadow'] as const;
 export type AiPurpose = (typeof AI_PURPOSES)[number];
 export const AI_PURPOSE_LABELS: Record<AiPurpose, string> = {
   prescreen: 'Vorprüfung der Suchtreffer',
@@ -93,6 +97,7 @@ export const AI_PURPOSE_LABELS: Record<AiPurpose, string> = {
   suggest: 'Textvorschläge',
   conversation: 'Antworten auswerten',
   assistant: 'KI-Assistent',
+  shadow: 'Modellvergleich (Test)',
 };
 
 /**

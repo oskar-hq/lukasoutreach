@@ -122,7 +122,7 @@ test('Außerhalb der Arbeitszeit: Hinweis mit den Zeiten', async ({ page }) => {
     return route.fulfill({ response, json: { ...body, withinWorkHours: false, workHours: { ...body.workHours, fromHour: 8, toHour: 19, days: [1, 2, 3, 4, 5] } } });
   });
   await login(page, 'ping=off');
-  await expect(page.getByTestId('linkedin-status')).toContainText('Gesendet wird nur zu Arbeitszeiten (Mo–Fr 8–19 Uhr).');
+  await expect(page.getByTestId('linkedin-status')).toContainText('Vernetzungsanfragen gehen nur zu Arbeitszeiten raus (Mo–Fr 8–19 Uhr).');
 });
 
 test('Abgleich schlägt fehl: Fehler steht sichtbar, auch bei zugeklappten Details', async ({ page }) => {

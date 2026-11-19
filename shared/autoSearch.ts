@@ -104,6 +104,15 @@ export const AUTO_SEARCH_FOCUS_LABELS: Record<AutoSearchFocus, string> = {
 export const AUTO_SEARCH_KAPITALANLAGE_PERCENT_DEFAULT = 50;
 export const AUTO_SEARCH_KAPITALANLAGE_PERCENT_STEP = 10;
 
+/**
+ * Zufälliger Start (Teammeeting 05.11.: „Scraping zufällig zwischen 6:30 und 8:00 statt immer zur selben Minute“):
+ * Mit `randomMinutes` = n startet jeder Termin an einem Tag irgendwann zwischen `time` und `time` + n Minuten (je Tag
+ * und Termin anders, aber fest – `nextRunAt` zeigt den echten Start). 0/fehlt = genau zur Uhrzeit. Nie über 23:59 hinaus.
+ * Seit 06.11. (Nutzer: „die einzelnen Läufe verteilen“) auch die Pause vor jedem weiteren Lauf fürs Tagesziel: zufällig
+ * zwischen `AUTO_SEARCH_FOLLOW_UP_PAUSE_MINUTES` und n Minuten (`followUpAt` zeigt den Start) statt immer gleich.
+ */
+export const AUTO_SEARCH_RANDOM_MINUTES_MAX = 180;
+
 /** Stichwörter je Zielgruppe, wenn das Profil für eine Seite keine enthält. */
 export const AUTO_SEARCH_FOCUS_KEYWORDS: Record<AutoSearchFocus, readonly string[]> = {
   kapitalanlage_vertrieb: ['Kapitalanlage', 'Kapitalanlageimmobilien', 'Immobilienvertrieb', 'Anlageimmobilien'],
@@ -222,6 +231,8 @@ export interface AutoSearchSchedule {
    * Gilt an denselben Tagen; jeder Termin startet einen eigenen Lauf (Tagesziel und Folgeläufe zählen für den Tag).
    */
   secondTime?: string | null;
+  /** Zufälliger Start bis zu so vielen Minuten nach `time`/`secondTime` (`AUTO_SEARCH_RANDOM_MINUTES_MAX`). Fehlt bei älteren Backends. */
+  randomMinutes?: number;
   profile: SearchProfile;
   /** Nächster geplanter Lauf (ms) – null, wenn aus. */
   nextRunAt: number | null;
@@ -270,6 +281,8 @@ export interface AutoSearchUpdate {
   time: string;
   /** Zweiter Termin „HH:MM“ oder null (aus). Fehlt er, bleibt der gespeicherte Wert (ältere Oberflächen). */
   secondTime?: string | null;
+  /** 0–`AUTO_SEARCH_RANDOM_MINUTES_MAX` Minuten zufälliger Start nach der Uhrzeit. Fehlt er, bleibt der gespeicherte Wert. */
+  randomMinutes?: number;
   profile: SearchProfile;
   /** 1–`AUTO_SEARCH_DAILY_TARGET_MAX` oder null. */
   dailyTarget?: number | null;
@@ -307,7 +320,8 @@ export type AutoSearchField =
   | 'dailyTarget'
   | 'maxRounds'
   | 'dailyBudgetEur'
-  | 'kapitalanlagePercent';
+  | 'kapitalanlagePercent'
+  | 'randomMinutes';
 
 /** Grenzen des Suchprofils – dieselben wie beim Start von Hand (`POST /api/lead-search/runs`). */
 export const AUTO_SEARCH_PROFILE_LIMITS = { terms: 20, termLength: 60, regionMin: 2, regionMax: 80, maxResults: 1000 } as const;
@@ -339,6 +353,10 @@ export function autoSearchProblem(update: AutoSearchUpdate): { field: AutoSearch
     (!Number.isFinite(budget) || budget < AUTO_SEARCH_DAILY_BUDGET_MIN || budget > AUTO_SEARCH_DAILY_BUDGET_MAX || Math.abs(Math.round(budget * 100) - budget * 100) > 1e-6)
   ) {
     return { field: 'dailyBudgetEur', message: `Tagesbudget von ${AUTO_SEARCH_DAILY_BUDGET_MIN.toLocaleString('de-DE')} bis ${AUTO_SEARCH_DAILY_BUDGET_MAX} € (auf den Cent).` };
+  }
+  const spread = update.randomMinutes;
+  if (spread !== undefined && (!Number.isInteger(spread) || spread < 0 || spread > AUTO_SEARCH_RANDOM_MINUTES_MAX)) {
+    return { field: 'randomMinutes', message: `Zufälliger Start von 0 bis ${AUTO_SEARCH_RANDOM_MINUTES_MAX} Minuten nach der Uhrzeit.` };
   }
   const percent = update.kapitalanlagePercent;
   if (percent !== undefined && (!Number.isInteger(percent) || percent < 0 || percent > 100 || percent % AUTO_SEARCH_KAPITALANLAGE_PERCENT_STEP !== 0)) {

@@ -25,7 +25,11 @@ export function AiCostSection({ data }: { data: DashboardResponse }) {
   const perClosed = cost.perClosedEur ?? null;
   const closed = cost.closedLeads ?? 0;
   const ratio = cost.totalEur > 0 ? dealValue / cost.totalEur : null;
-  const max = Math.max(0.01, ...AI_PURPOSES.map((purpose) => cost.byPurpose[purpose]));
+  // Ältere Backends kennen nicht jeden Zweck (z. B. `shadow`, 09.11.) – fehlt einer, zählt er 0.
+  const costOf = (purpose: (typeof AI_PURPOSES)[number]) => cost.byPurpose[purpose] ?? 0;
+  const max = Math.max(0.01, ...AI_PURPOSES.map(costOf));
+  // Der Modellvergleich erscheint erst, wenn er etwas gekostet hat.
+  const purposes = AI_PURPOSES.filter((purpose) => purpose !== 'shadow' || costOf(purpose) > 0);
 
   return (
     <section aria-labelledby="ai-cost-title" data-testid="ai-cost-section">
@@ -78,18 +82,18 @@ export function AiCostSection({ data }: { data: DashboardResponse }) {
 
         <ChartCard title="Wofür">
           <ol className="space-y-3" aria-label="KI-Kosten je Zweck">
-            {AI_PURPOSES.map((purpose) => (
+            {purposes.map((purpose) => (
               <li key={purpose} data-testid={`ai-cost-${purpose}`}>
                 <div className="flex items-baseline justify-between gap-3">
                   <span className="truncate text-[12.5px] font-medium text-ink-2">{AI_PURPOSE_LABELS[purpose]}</span>
-                  <span className="text-[12.5px] font-semibold tabular-nums text-ink">{euroCents.format(cost.byPurpose[purpose])}</span>
+                  <span className="text-[12.5px] font-semibold tabular-nums text-ink">{euroCents.format(costOf(purpose))}</span>
                 </div>
                 <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-white/[0.05]">
                   <motion.div
                     className="h-full w-full rounded-full"
                     style={{ background: CHART.primary }}
                     initial={{ x: '-100%' }}
-                    animate={{ x: `${(cost.byPurpose[purpose] > 0 ? Math.max(1.5, (cost.byPurpose[purpose] / max) * 100) : 0) - 100}%` }}
+                    animate={{ x: `${(costOf(purpose) > 0 ? Math.max(1.5, (costOf(purpose) / max) * 100) : 0) - 100}%` }}
                     transition={{ type: 'spring', bounce: 0, duration: 0.5 }}
                   />
                 </div>

@@ -660,6 +660,259 @@ const MIGRATIONS: string[] = [
       WHERE lower(value) IN ('bauträger', 'projektentwicklung', 'projektentwickler', 'wohnungsbau')
    );
   `,
+  // 46 · Account deaktivieren (Wunsch des Nutzers 03.11.): 1 = kein Traffic mehr über den Account (Suche, Profile,
+  //      Firmenseiten, Aufwärmen, Senden), Grenzen und Platz bleiben gespeichert. NULL/0 = aktiv.
+  `
+  ALTER TABLE linkedin_account_prefs ADD COLUMN disabled INTEGER;
+  `,
+  // 47 · Teammeeting 05.11. (Vertrag shared/linkedin.ts → Anfragen von Hand …): zufälliger Start der automatischen Suche
+  //      (Minuten nach der Uhrzeit), wie Anfragen je Gründer-Account rausgehen (spread/instant/manual + Ende),
+  //      eingeplante Anfragen am Lead (JSON `QueuedInvite`) und ihre Warteschlange, bei LinkedIn gesehene gesendete
+  //      Anfragen (Cockpit oder von Hand), neue Kontakte zur Übernahme und je Account der Zeitpunkt, ab dem neue
+  //      Kontakte zählen (davor nur über die Überprüfung).
+  `
+  ALTER TABLE auto_search_schedules ADD COLUMN random_minutes INTEGER;
+  ALTER TABLE linkedin_account_prefs ADD COLUMN invite_mode TEXT;
+  ALTER TABLE linkedin_account_prefs ADD COLUMN manual_until INTEGER;
+  ALTER TABLE leads ADD COLUMN queued_invite TEXT;
+  CREATE TABLE linkedin_invite_queue (
+    lead_id TEXT PRIMARY KEY,
+    founder TEXT NOT NULL,
+    by_founder TEXT,
+    actor TEXT,
+    message TEXT,
+    client_id TEXT,
+    due_at INTEGER NOT NULL,
+    queued_at INTEGER NOT NULL
+  );
+  CREATE INDEX linkedin_invite_queue_due ON linkedin_invite_queue (founder, due_at);
+  CREATE TABLE linkedin_sent_invites (
+    founder TEXT NOT NULL,
+    person_key TEXT NOT NULL,
+    provider_id TEXT,
+    public_identifier TEXT,
+    name TEXT,
+    headline TEXT,
+    source TEXT NOT NULL,
+    sent_at INTEGER NOT NULL,
+    seen_at INTEGER NOT NULL,
+    accepted_at INTEGER,
+    lead_id TEXT,
+    PRIMARY KEY (founder, person_key)
+  );
+  CREATE INDEX linkedin_sent_invites_sent ON linkedin_sent_invites (founder, sent_at);
+  CREATE INDEX linkedin_sent_invites_public ON linkedin_sent_invites (public_identifier);
+  CREATE TABLE linkedin_new_contacts (
+    id TEXT PRIMARY KEY,
+    founder TEXT NOT NULL,
+    person_key TEXT NOT NULL,
+    provider_id TEXT,
+    public_identifier TEXT,
+    name TEXT NOT NULL,
+    headline TEXT,
+    profile_url TEXT,
+    connected_at INTEGER,
+    manual_invite INTEGER NOT NULL DEFAULT 0,
+    sent_at INTEGER,
+    status TEXT NOT NULL,
+    lead_id TEXT,
+    note TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (founder, person_key)
+  );
+  CREATE INDEX linkedin_new_contacts_status ON linkedin_new_contacts (status, updated_at);
+  CREATE TABLE linkedin_relation_marks (
+    account_id TEXT PRIMARY KEY,
+    since INTEGER NOT NULL
+  );
+  `,
+  // 48 · Optimierungs-Bericht (Wunsch des Nutzers 09.11.: mehr Daten, um Suche und KI-Kosten zu verbessern, Vertrag
+  //      shared/learning.ts → Bericht): je Lauf Ergebnis und Trichter (`search_runs`), je geprüftem Treffer, wie weit er
+  //      kam und warum (`search_decisions`, ohne Namen, 120 Tage), und der Modellvergleich (`ai_shadow`).
+  `
+  CREATE TABLE search_runs (
+    id            TEXT PRIMARY KEY,
+    started_at    INTEGER NOT NULL,
+    finished_at   INTEGER NOT NULL,
+    mode          TEXT NOT NULL,
+    status        TEXT NOT NULL,
+    error_code    TEXT,
+    auto          INTEGER NOT NULL DEFAULT 0,
+    max_results   INTEGER,
+    leads         INTEGER NOT NULL,
+    screened_out  INTEGER NOT NULL,
+    profiles      INTEGER NOT NULL,
+    qualified     INTEGER NOT NULL,
+    rejected      INTEGER NOT NULL,
+    deferred      INTEGER NOT NULL,
+    cost_usd      REAL NOT NULL
+  );
+  CREATE INDEX search_runs_started ON search_runs (started_at);
+  CREATE TABLE search_decisions (
+    run_id          TEXT NOT NULL,
+    provider_id     TEXT NOT NULL,
+    at              INTEGER NOT NULL,
+    query_key       TEXT,
+    status          TEXT NOT NULL,
+    prescreen_fit   TEXT,
+    prescreen_reason TEXT,
+    profile_fetched INTEGER NOT NULL,
+    category        TEXT,
+    confidence      REAL,
+    qualified       INTEGER,
+    reason          TEXT,
+    note            TEXT,
+    headline        TEXT,
+    position        TEXT,
+    industry        TEXT,
+    PRIMARY KEY (run_id, provider_id)
+  );
+  CREATE INDEX search_decisions_at ON search_decisions (at);
+  CREATE TABLE ai_shadow (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    at                INTEGER NOT NULL,
+    purpose           TEXT NOT NULL,
+    provider_id       TEXT NOT NULL,
+    run_id            TEXT,
+    headline          TEXT,
+    main_model        TEXT NOT NULL,
+    main_verdict      TEXT NOT NULL,
+    main_category     TEXT,
+    main_confidence   REAL,
+    shadow_model      TEXT NOT NULL,
+    shadow_verdict    TEXT NOT NULL,
+    shadow_category   TEXT,
+    shadow_confidence REAL
+  );
+  CREATE INDEX ai_shadow_at ON ai_shadow (at);
+  `,
+  // 49 · Wohin die LinkedIn-Abrufe gehen (Nutzer 09.11.: „alle Accounts voll, null gefunden“): je Tag, Account und Zweck
+  //      (Profil/Firmenseite der Lead-Suche, neue Kontakte, Aufwärmen, Suche), 120 Tage – `linkedin_account_usage` bleibt
+  //      der Zähler fürs Limit (14 Tage). Läufe mit Gründer, Suchbegriffen und Fehlertext.
+  `
+  CREATE TABLE linkedin_usage_log (
+    day        TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    source     TEXT NOT NULL,
+    count      INTEGER NOT NULL,
+    PRIMARY KEY (day, account_id, source)
+  );
+  ALTER TABLE search_runs ADD COLUMN founder TEXT;
+  ALTER TABLE search_runs ADD COLUMN keywords TEXT;
+  ALTER TABLE search_runs ADD COLUMN positions TEXT;
+  ALTER TABLE search_runs ADD COLUMN error_message TEXT;
+  `,
+  // 50 · Neue Kontakte (Bericht 09.11.: 454 Profilabrufe am Tag ohne Lead-Suche): das abgerufene Profil samt Firmenseite
+  //      am Kontakt merken – scheitert danach die KI o. Ä., liest der nächste Versuch (alle paar Minuten) nicht erneut
+  //      über LinkedIn.
+  `
+  ALTER TABLE linkedin_new_contacts ADD COLUMN enriched TEXT;
+  `,
+  // 51 · Nutzungsdaten (Vertrag shared/telemetry.ts, Nutzer 09.11.: „alles auf Datengrundlage optimieren“): Ereignisse
+  //      der Oberfläche (ohne Inhalte), jede API-Anfrage je Tag und Route zusammengefasst, Hintergrund-Jobs. 90 Tage.
+  `
+  CREATE TABLE ui_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    at         INTEGER NOT NULL,
+    username   TEXT,
+    role       TEXT,
+    session_id TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    view       TEXT,
+    target     TEXT,
+    ms         INTEGER,
+    props      TEXT,
+    device     TEXT
+  );
+  CREATE INDEX ui_events_at ON ui_events (at);
+  CREATE TABLE api_metrics (
+    day          TEXT NOT NULL,
+    method       TEXT NOT NULL,
+    route        TEXT NOT NULL,
+    status_class TEXT NOT NULL,
+    count        INTEGER NOT NULL,
+    total_ms     REAL NOT NULL,
+    max_ms       REAL NOT NULL,
+    slow         INTEGER NOT NULL,
+    PRIMARY KEY (day, method, route, status_class)
+  );
+  CREATE TABLE job_runs (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    at     INTEGER NOT NULL,
+    name   TEXT NOT NULL,
+    ms     INTEGER NOT NULL,
+    ok     INTEGER NOT NULL,
+    detail TEXT
+  );
+  CREATE INDEX job_runs_at ON job_runs (at);
+  `,
+  // 52 · Server-Logs (Nutzer 09.11.: „Claude soll alles selbst nachvollziehen können“): Warnungen und Fehler des
+  //      Backends, Geheimnisse geschwärzt, 14 Tage bzw. höchstens 20.000 Zeilen.
+  `
+  CREATE TABLE server_logs (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    at      INTEGER NOT NULL,
+    level   TEXT NOT NULL,
+    msg     TEXT NOT NULL,
+    detail  TEXT
+  );
+  CREATE INDEX server_logs_at ON server_logs (at);
+  `,
+  // 53 · Feedback vom Kunden (Vertrag shared/feedback.ts, Nutzer 09.11.): Text, Art, Stand, Antwort, Zusammenhang (JSON)
+  //      und Anzahl Bilder (Dateien unter DATA_DIR/feedback/<id>/).
+  `
+  CREATE TABLE feedback (
+    id          TEXT PRIMARY KEY,
+    number      INTEGER NOT NULL UNIQUE,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    username    TEXT NOT NULL,
+    by_name     TEXT NOT NULL,
+    founder     TEXT,
+    kind        TEXT NOT NULL,
+    text        TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    answer      TEXT,
+    image_count INTEGER NOT NULL DEFAULT 0,
+    context     TEXT
+  );
+  CREATE INDEX feedback_status ON feedback (status, created_at);
+  `,
+  // 54 · Automatische Suche (10.11.): eingereihter Folgelauf fürs Tagesziel (JSON) – übersteht einen Neustart. Bisher
+  //      stand er nur im Speicher: Nach jedem Update in der Pause zwischen zwei Läufen war für den Tag still Schluss.
+  `
+  ALTER TABLE auto_search_state ADD COLUMN follow_up TEXT;
+  `,
+  // 55 · Feedback #1 (Johannes, 12.11.): Kontakte per LinkedIn-Link, die vor dem Update eingetragen wurden, nachträglich
+  //      als Vernetzung von Hand zählen – wie neue (`createContact`): „Anfrage gesendet“ (Stufe beim Eintragen
+  //      „Anfrage gesendet“ oder „Vernetzt“), bei „Vernetzt“ zusätzlich „angenommen“, je zum Zeitpunkt des Eintragens.
+  //      Dazu die Anfrage als eingetragen (`logged`) merken. Nur Leads ohne Ereignis „Anfrage gesendet“.
+  `
+  CREATE TEMP TABLE contact_backfill AS
+    SELECT e.lead_id, e.at, l.owner, l.provider_id, lower(json_extract(l.person, '$.publicIdentifier')) AS public_identifier,
+           trim(COALESCE(json_extract(l.person, '$.firstName'), '') || ' ' || COALESCE(json_extract(l.person, '$.lastName'), '')) AS name,
+           json_extract(l.person, '$.headline') AS headline,
+           e.title LIKE '%· Vernetzt' AS connected
+      FROM lead_events e JOIN leads l ON l.id = e.lead_id
+     WHERE e.kind = 'created' AND json_extract(l.origin, '$.kind') = 'contact'
+       AND (e.title LIKE 'Persönlicher Kontakt – per LinkedIn-Link aufgenommen · Vernetzt'
+         OR e.title LIKE 'Persönlicher Kontakt – per LinkedIn-Link aufgenommen · Anfrage gesendet')
+       AND NOT EXISTS (SELECT 1 FROM lead_events x WHERE x.lead_id = e.lead_id AND x.kind = 'invite_sent');
+  INSERT INTO lead_events (id, lead_id, kind, at, by, title, text, label)
+    SELECT lower(hex(randomblob(16))), lead_id, 'invite_sent', at, owner, 'Vernetzungsanfrage gesendet · von Hand auf LinkedIn', NULL, NULL FROM contact_backfill;
+  INSERT INTO lead_events (id, lead_id, kind, at, by, title, text, label)
+    SELECT lower(hex(randomblob(16))), lead_id, 'invite_accepted', at + 1, NULL, 'Vernetzt · per LinkedIn-Link eingetragen', NULL, NULL
+      FROM contact_backfill WHERE connected
+       AND NOT EXISTS (SELECT 1 FROM lead_events x WHERE x.lead_id = contact_backfill.lead_id AND x.kind = 'invite_accepted');
+  INSERT INTO linkedin_sent_invites (founder, person_key, provider_id, public_identifier, name, headline, source, sent_at, seen_at, accepted_at, lead_id)
+    SELECT owner, lower(provider_id), provider_id, public_identifier, NULLIF(name, ''), headline, 'logged', at, at, CASE WHEN connected THEN at + 1 END, lead_id
+      FROM contact_backfill WHERE true
+    ON CONFLICT (founder, person_key) DO UPDATE SET source = 'logged', sent_at = excluded.sent_at,
+      accepted_at = COALESCE(linkedin_sent_invites.accepted_at, excluded.accepted_at), lead_id = excluded.lead_id;
+  DROP TABLE contact_backfill;
+  `,
 ];
 
 export type Database = DatabaseSync;

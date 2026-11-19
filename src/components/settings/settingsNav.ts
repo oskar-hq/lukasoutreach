@@ -167,7 +167,7 @@ const PAGE_PLAN: Record<SettingGroup, readonly (Omit<SettingsSubpage, 'group' | 
     { name: 'accounts', label: 'LinkedIn-Accounts', keys: ['UNIPILE_ACCOUNT_NICK', 'UNIPILE_ACCOUNT_JOHANNES', 'UNIPILE_WARMUP_ACCOUNTS', 'UNIPILE_ACCOUNTS_USED'], extra: 'linkedinAccounts' },
     { name: 'unsent', label: 'Nicht gesendete Anfragen', keys: [], extra: 'unsentInvites' },
   ],
-  anthropic: [{ name: 'main', label: 'KI-Bewertung', inline: true, keys: ['ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL'] }],
+  anthropic: [{ name: 'main', label: 'KI-Bewertung', inline: true, keys: ['ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL', 'ANTHROPIC_PRESCREEN_MODEL', 'AI_SHADOW_MODEL', 'AI_SHADOW_PERCENT'] }],
   meta: [{ name: 'main', label: 'Meta', inline: true, keys: ['META_ACCESS_TOKEN'] }],
   clay: [
     {

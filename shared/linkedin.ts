@@ -9,7 +9,8 @@
  *
  * Schutz (Backend erzwingt, Frontend zeigt nur an):
  *   - Tageslimits je Account: Vernetzungsanfragen (Standard 20, zusätzlich 80 in 7 Tagen) und Nachrichten (40);
- *   - nur zu Arbeitszeiten (Standard Mo–Fr 8–19 Uhr, Europe/Berlin);
+ *   - Vernetzungsanfragen nur zu Arbeitszeiten (Standard Mo–Fr 8–19 Uhr, Europe/Berlin). Nachrichten gehen seit 07.11.
+ *     jederzeit raus – wann, entscheidet, wer die Aufgabe abarbeitet;
  *   - 3–8 s zufällige Pause zwischen zwei Aktionen eines Accounts (Anfragen werden nacheinander abgearbeitet);
  *   - meldet LinkedIn/Unipile ein Limit oder einen Zugangsfehler, wird der Account pausiert (`pausedUntil`) und nimmt
  *     bis dahin keine Aktionen an.
@@ -104,13 +105,30 @@ export interface LinkedInAccountStatus {
   pausedUntil: number | null;
   /** Ein Satz, warum pausiert. */
   pauseReason: string | null;
+  /** Wie Anfragen über diesen Account rausgehen (05.11., siehe unten). Fehlt bei älteren Backends. */
+  inviteMode?: LinkedInInviteMode;
+  /** Bei `inviteMode` `manual`: bis wann (ms), danach wieder `spread`; null = bis auf Widerruf. */
+  manualUntil?: number | null;
+  /**
+   * Heute gesendete Anfragen insgesamt (05.11.): über das Cockpit **plus** von Hand auf LinkedIn (Sales Navigator …),
+   * die der Abgleich bei LinkedIn gesehen hat. `limit` = Tagesgrenze des Accounts (Einstellungen → LinkedIn →
+   * Accounts), sie ist auch das Tagesziel für das Vernetzen von Hand. Fehlt bei älteren Backends.
+   */
+  invitesSentToday?: LinkedInLimit;
+  /** Davon von Hand auf LinkedIn gesendet. */
+  manualInvitesToday?: number;
+  /** Eingeplante, noch nicht gesendete Anfragen (`inviteMode` `spread`) und die nächste davon (ms). */
+  queuedInvites?: number;
+  nextQueuedAt?: number | null;
+  /** Wann die gesendeten Anfragen zuletzt bei LinkedIn gelesen wurden (ms), null = noch nie. */
+  invitesCheckedAt?: number | null;
 }
 
 export interface LinkedInStatusResponse {
   mode: LinkedInActionsMode;
   accounts: LinkedInAccountStatus[];
   workHours: { fromHour: number; toHour: number; days: number[]; timeZone: string };
-  /** Gerade innerhalb der Arbeitszeit? (Simulation: immer true) */
+  /** Gerade innerhalb der Arbeitszeit? Gilt nur für Vernetzungsanfragen, nicht für Nachrichten. (Simulation: immer true) */
   withinWorkHours: boolean;
   /** Letzter Abgleich (ms) oder null. */
   lastSyncAt: number | null;
@@ -179,17 +197,19 @@ export interface LeadLinkedInState {
 /**
  * Fehlercodes:
  * - `linkedin_off` (409) – Aktionen ausgeschaltet;
+ * - `linkedin_manual` (409) – über diesen Account wird gerade nur von Hand vernetzt (`LinkedInInviteMode` `manual`);
  * - `linkedin_no_account` (409) – für den angemeldeten Gründer ist kein LinkedIn-Account eingetragen;
  * - `linkedin_not_owner` (409) – nicht mehr verwendet: seit 18.10. senden die Routen für den Besitzer des Leads über
  *   dessen Account, auch wenn der andere Gründer klickt (Umschalter „Alle“); `actor` = wer geklickt hat;
  * - `invalid_transition` (409) – Aktion passt nicht zur Stufe (wie bei `/events`);
- * - `linkedin_outside_hours` (409) – außerhalb der Arbeitszeit;
+ * - `linkedin_outside_hours` (409) – Vernetzungsanfrage außerhalb der Arbeitszeit (Nachrichten nie);
  * - `linkedin_limit` (429) – Tages-/Wochenlimit erreicht, Header `Retry-After` in Sekunden;
  * - `linkedin_paused` (503) – Account pausiert nach Limit-/Zugangsfehler, Header `Retry-After`;
  * - `linkedin_rejected` (409) – LinkedIn lehnt genau diese Aktion ab (z. B. schon eingeladen), Account bleibt aktiv;
  * - `linkedin_error` (502) – Unipile nicht erreichbar oder unerwarteter Fehler; nichts gesendet.
  */
 export type LinkedInErrorCode =
+  | 'linkedin_manual'
   | 'linkedin_off'
   | 'linkedin_no_account'
   | 'linkedin_not_owner'
@@ -215,6 +235,11 @@ export interface LinkedInUnipileAccount {
   /** Was ohne eigene Grenze gilt (Gründer scrapen mit halbem Limit; Anfragen: Gründer- bzw. Aufwärm-Einstellung). */
   limitDefaults?: { profilesPerDay: number; searchResultsPerDay: number; invitesPerDay: number };
   /**
+   * true = Account ist deaktiviert (Wunsch des Nutzers 03.11.): kein Traffic mehr darüber – keine Suche, keine Profile,
+   * keine Firmenseiten, kein Aufwärmen, beim Gründer-Account auch kein Senden und kein Abgleich. Fehlt bei älteren Backends.
+   */
+  disabled?: boolean;
+  /**
    * true = über diesen Account sucht die Lead-Suche gerade (UNIPILE_ACCOUNT_ID bzw. die automatische Wahl, wenn leer).
    * Fehlt bei älteren Backends.
    */
@@ -224,6 +249,9 @@ export interface LinkedInUnipileAccount {
    * Unipile-Zugang). Fehlt bei älteren Backends (= genutzt).
    */
   used?: boolean;
+  /** Nur Gründer-Accounts: wie Anfragen rausgehen (05.11.). Fehlt bei älteren Backends und Scraping-Accounts. */
+  inviteMode?: LinkedInInviteMode;
+  manualUntil?: number | null;
 }
 
 export interface LinkedInAccountsResponse {
@@ -343,6 +371,8 @@ export interface LinkedInWarmupResponse {
  *   PUT /api/linkedin/accounts/:id/limits  Partial<LinkedInAccountLimits> → 200 LinkedInAccountLimits · 400 invalid_request
  *   PUT /api/linkedin/accounts/order       LinkedInAccountOrderRequest → 200 { ok: true } – Reihenfolge der
  *                                          Accounts beim Suchen (zuerst ausgeschöpft); seit 22.10. auch Gründer, ohne Platz zuletzt.
+ *   PUT /api/linkedin/accounts/:id/disabled LinkedInAccountDisabledRequest → 200 LinkedInAccountDisabledRequest – Account
+ *                                          mit einem Klick aus- bzw. wieder einschalten (03.11.); Grenzen und Platz bleiben.
  */
 export interface LinkedInAccountLimits {
   profilesPerDay: number | null;
@@ -350,7 +380,218 @@ export interface LinkedInAccountLimits {
   invitesPerDay: number | null;
 }
 
+export interface LinkedInAccountDisabledRequest {
+  disabled: boolean;
+}
+
 export interface LinkedInAccountOrderRequest {
   /** Account-IDs, zuerst genutzter zuerst. */
   ids: string[];
+}
+
+/**
+ * ── Anfragen von Hand, über den Tag verteilt, Überprüfung (Teammeeting 05.11.) ──────────────────────────────────────
+ * Hintergrund: niedrige Annahmequote (10–30 %), Sorge vor Einschränkungen durch LinkedIn. Darum menschlicher arbeiten:
+ *
+ * 1. **Wie Anfragen rausgehen** – je Gründer-Account `LinkedInInviteMode`:
+ *    - `spread` (Standard): Ein Klick auf „Vernetzen“ sendet nicht sofort, sondern plant die Anfrage ein
+ *      (`CockpitLead.queuedInvite`). Der Server schickt die eingeplanten Anfragen zu zufälligen Zeiten innerhalb der
+ *      Arbeitszeit, über den Tag verteilt (mindestens `INVITE_SPREAD_MIN_GAP_MINUTES` Minuten Abstand, nie mehr als die
+ *      Tagesgrenze). Gilt nur bei echtem Senden (`mode` `live`); in der Simulation und bei `off` geht es wie bisher.
+ *      Grenzen, Pausen und Abbruch bei Limit/Zugang bleiben; schlägt das Senden fehl, steht es im Verlauf.
+ *    - `instant`: wie bisher sofort.
+ *    - `manual`: über diesen Account schickt das Cockpit gar keine Anfragen (auch nicht als Ausweich-Account) – vernetzt
+ *      wird von Hand auf LinkedIn (Sales Navigator). `POST …/linkedin/invite` → 409 `linkedin_manual` mit Satz. Mit
+ *      `until` endet das von selbst (z. B. Testwoche), danach `spread`.
+ *    PUT    /api/linkedin/accounts/:id/invite-mode  LinkedInInviteModeRequest → 200 LinkedInInviteModeRequest
+ *                                                   (Rechte wie /accounts; 400 invalid_request; 409 linkedin_no_account,
+ *                                                   wenn der Account keinem Gründer gehört)
+ *    DELETE /api/leads/:id/linkedin/invite          → 200 LeadDetailResponse – eingeplante Anfrage zurücknehmen
+ *                                                   (keine eingeplant → 200 unverändert)
+ *
+ * 2. **Anfragen von Hand erkennen** – der Abgleich (alle LINKEDIN_SYNC_MINUTES Minuten, nur lesend, braucht nur den
+ *    Unipile-Zugang) liest je Gründer-Account die offenen, gesendeten Anfragen (`GET /users/invite/sent`) und merkt
+ *    sich jede neue. Was nicht vom Cockpit kam, zählt als „von Hand“ (`manualInvitesToday`, Statistik). Nimmt jemand
+ *    an (`GET /users/relations`), den das Cockpit noch nicht kennt, wird er übernommen (`LinkedInNewContact`):
+ *    - mit gesehener Anfrage von Hand → immer Lead (`origin.via` `manual_invite`), Stufe „Vernetzt“;
+ *    - ohne gesehene Anfrage (z. B. in Minuten angenommen oder er hat euch angefragt) → nur, wenn die KI ihn als
+ *      passend einstuft (`new_connection`), sonst `rejected` mit Grund – nichts geht still verloren.
+ *    Beides mit Profil, Firmenseite und KI-Zusammenfassung wie bei der Lead-Suche; ein vorhandener LinkedIn-Chat wird
+ *    übernommen. Im Verlauf stehen Anfrage (mit Datum laut LinkedIn) und Annahme – so zählt das Dashboard sie mit.
+ *    Kontakte von vor dem ersten Abgleich übernimmt nur die Überprüfung (3.).
+ *    GET  /api/linkedin/new-contacts                → 200 LinkedInNewContactsResponse (neueste zuerst, 200 Stück)
+ *    POST /api/linkedin/new-contacts/:id/import     → 200 LinkedInNewContact – aussortierten Kontakt doch übernehmen
+ *                                                   (404 not_found)
+ *
+ * 3. **Überprüfung** („wurde etwas übersehen?“): liest je Gründer-Account alle Kontakte der letzten `days` Tage bei
+ *    LinkedIn und vergleicht mit dem Cockpit – Anfragen, die angenommen sind, aber noch auf „Anfrage gesendet“ standen
+ *    (werden korrigiert), Vernetzte ohne Nachricht (der LinkedIn-Chat wird geprüft und übernommen, sonst gemeldet) und
+ *    Kontakte ohne Lead (wie 2.). Läuft im Hintergrund mit den Schutzpausen, nur lesend, sendet nie.
+ *    POST /api/linkedin/audit  LinkedInAuditRequest → 202 LinkedInAuditStatus (gestartet) · 200 (läuft schon) ·
+ *                              409 linkedin_off ohne Unipile · 429 linkedin_limit (live höchstens einmal pro Stunde,
+ *                              Header Retry-After)
+ *    GET  /api/linkedin/audit  → 200 LinkedInAuditStatus
+ *
+ * 4. **Statistik** für den Vergleich nach der Testwoche:
+ *    GET /api/linkedin/invite-stats?days=14  → 200 LinkedInInviteStatsResponse (1–60 Tage, Standard 14)
+ *
+ * Simulation: Status, Statistik und Überprüfung arbeiten auf den Leads; die Überprüfung findet zusätzlich einen
+ * erfundenen Kontakt ohne Lead („Mara Beispiel“), damit die Oberfläche alle Fälle zeigt.
+ */
+export type LinkedInInviteMode = 'spread' | 'instant' | 'manual';
+export const LINKEDIN_INVITE_MODES: readonly LinkedInInviteMode[] = ['spread', 'instant', 'manual'];
+export const LINKEDIN_INVITE_MODE_LABELS: Record<LinkedInInviteMode, string> = {
+  spread: 'Über den Tag verteilt',
+  instant: 'Sofort senden',
+  manual: 'Nur von Hand',
+};
+/** Kleinster Abstand zweier eingeplanter Anfragen eines Accounts. */
+export const INVITE_SPREAD_MIN_GAP_MINUTES = 6;
+/** Vorschlag für „Nur von Hand“ (Testwoche). */
+export const MANUAL_INVITES_DEFAULT_DAYS = 7;
+
+export interface LinkedInInviteModeRequest {
+  mode: LinkedInInviteMode;
+  /** Nur bei `manual`: Ende (ms, in der Zukunft) oder null = bis auf Widerruf. */
+  until?: number | null;
+}
+
+export type LinkedInNewContactStatus = 'pending' | 'imported' | 'rejected' | 'failed';
+
+export interface LinkedInNewContact {
+  id: string;
+  founder: AuthFounderId;
+  name: string;
+  headline: string | null;
+  profileUrl: string | null;
+  /** Vernetzt seit (ms, laut LinkedIn). */
+  connectedAt: number | null;
+  /** true = Anfrage war vorher bei LinkedIn zu sehen (von Hand gesendet). */
+  manualInvite: boolean;
+  status: LinkedInNewContactStatus;
+  /** Lead, wenn übernommen (oder schon vorhanden). */
+  leadId: string | null;
+  /** Ein Satz: Grund fürs Aussortieren bzw. Fehler. */
+  note: string | null;
+  updatedAt: number;
+}
+
+export interface LinkedInNewContactsResponse {
+  contacts: LinkedInNewContact[];
+}
+
+export interface LinkedInAuditRequest {
+  /** Zeitraum in Tagen (1–30), Standard 14. */
+  days?: number;
+}
+
+export const LINKEDIN_AUDIT_DAYS_DEFAULT = 14;
+export const LINKEDIN_AUDIT_DAYS_MAX = 30;
+
+export interface LinkedInAuditLead {
+  leadId: string;
+  name: string;
+  connectedAt: number | null;
+}
+
+export interface LinkedInAuditFounder {
+  founder: AuthFounderId;
+  /** Neue Kontakte im Zeitraum laut LinkedIn. */
+  connections: number;
+  /** Davon schon richtig im Cockpit. */
+  ok: number;
+  /** Angenommen, standen aber noch auf „Anfrage gesendet“ – jetzt korrigiert. */
+  fixedAccepted: LinkedInAuditLead[];
+  /** Nachrichten standen im LinkedIn-Chat, fehlten im Cockpit – jetzt übernommen. */
+  chatImported: LinkedInAuditLead[];
+  /** Vernetzt, aber noch keine Nachricht (auch nicht im LinkedIn-Chat) – jetzt anschreiben. */
+  notMessaged: LinkedInAuditLead[];
+  /** Kontakte ohne Lead im Cockpit – übernommen bzw. geprüft wie neue Kontakte. */
+  unknown: LinkedInNewContact[];
+  /** Anfragen im Zeitraum (Cockpit + von Hand gesehen) und davon angenommen – vor und nach der Überprüfung. */
+  invitesSent: number;
+  acceptedBefore: number;
+  acceptedAfter: number;
+  /** Ein Satz, falls es für diesen Gründer nicht ging. */
+  problem: string | null;
+}
+
+export interface LinkedInAuditStatus {
+  running: boolean;
+  startedAt: number | null;
+  finishedAt: number | null;
+  days: number;
+  /** Fortschritt: geprüfte Gründer bzw. Kontakte. */
+  done: number;
+  total: number;
+  founders: LinkedInAuditFounder[];
+}
+
+export interface LinkedInInviteStatsDay {
+  /** JJJJ-MM-TT (Ortszeit der Arbeitszeit). */
+  date: string;
+  /** Über das Cockpit gesendet. */
+  sentCockpit: number;
+  /** Von Hand auf LinkedIn gesendet (vom Abgleich gesehen). */
+  sentManual: number;
+  /** An diesem Tag angenommen – egal, wann die Anfrage gesendet wurde (auch ältere aus dem Cockpit). */
+  accepted: number;
+  /**
+   * Von den an diesem Tag gesendeten Anfragen (Cockpit + von Hand) bis heute angenommen (07.11.). Summe über die Tage =
+   * `acceptedOfSent` – passt also zur Annahmequote, `accepted` nicht unbedingt.
+   */
+  acceptedOfDay?: number;
+}
+
+export interface LinkedInInviteStatsFounder {
+  founder: AuthFounderId;
+  days: LinkedInInviteStatsDay[];
+  /** Summe im Zeitraum. */
+  sent: number;
+  sentManual: number;
+  /** Von den im Zeitraum gesendeten Anfragen bis heute angenommen. */
+  acceptedOfSent: number;
+  /** acceptedOfSent / sent, null ohne Anfragen. */
+  rate: number | null;
+  /** Getrennt: Quote der Anfragen von Hand bzw. über das Cockpit. */
+  rateManual: number | null;
+  rateCockpit: number | null;
+  /** Seit Beginn (07.11., Wunsch des Nutzers „lifetime“): alle Anfragen über den Account und davon bis heute angenommen. */
+  lifetime?: LinkedInInviteTotals;
+}
+
+export interface LinkedInInviteTotals {
+  sent: number;
+  sentManual: number;
+  acceptedOfSent: number;
+  rate: number | null;
+  rateManual: number | null;
+  rateCockpit: number | null;
+}
+
+export interface LinkedInInviteStatsResponse {
+  days: number;
+  founders: LinkedInInviteStatsFounder[];
+}
+
+/**
+ * Anfragen von Hand mit Stand (06.11., Knopf im Dashboard → Vernetzen „wer hat angenommen?“):
+ *   GET /api/linkedin/manual-invites?days=14 → 200 LinkedInManualInvitesResponse (1–60 Tage, neueste zuerst)
+ */
+export interface LinkedInManualInvite {
+  founder: AuthFounderId;
+  name: string;
+  headline: string | null;
+  /** LinkedIn-Profil (https), falls bekannt. */
+  profileUrl: string | null;
+  sentAt: number;
+  /** Angenommen am (ms) – null = noch offen. */
+  acceptedAt: number | null;
+  /** Lead im Cockpit, falls übernommen. */
+  leadId: string | null;
+}
+
+export interface LinkedInManualInvitesResponse {
+  days: number;
+  invites: LinkedInManualInvite[];
 }

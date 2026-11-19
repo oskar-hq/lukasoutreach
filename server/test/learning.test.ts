@@ -174,6 +174,8 @@ test('Live: Rückmeldung fließt in den nächsten Lauf – Beispiele im Prompt (
     UNIPILE_DSN: unipile.baseUrl,
     UNIPILE_API_KEY: 'unipile-test-key',
     ANTHROPIC_API_KEY: 'anthropic-test-key',
+    // Modellvergleich aus: sonst zählten zufällige Zusatzanfragen mit.
+    AI_SHADOW_PERCENT: '0',
     META_ACCESS_TOKEN: 'meta-test-key',
     DATA_DIR: dataDir,
   });
@@ -237,4 +239,48 @@ test('Live: Rückmeldung fließt in den nächsten Lauf – Beispiele im Prompt (
   const prescreen = later.find((request) => systemText(request.body).includes('[cockpit:vorpruefung]'));
   if (prescreen) assert.match(systemText(prescreen.body), /<beispiele>/);
   await app.close();
+});
+
+test('Ohne Kontakt verworfen zählt automatisch als „passt nicht“ – wieder geöffnet fällt es weg (09.11.)', async () => {
+  const { server, learn } = setup();
+  const [dismissed, contacted] = await create(server, [card(), card({ providerId: 'ACoLEARN002', publicIdentifier: 'max-muster' })]);
+  const act = (id: string, action: string) => server.inject({ method: 'POST', url: `/api/leads/${id}/events`, payload: { action } });
+  assert.equal((await act(dismissed.id, 'lost')).statusCode, 200);
+  assert.equal((await act(contacted.id, 'invite_sent')).statusCode, 200);
+  assert.equal((await act(contacted.id, 'lost')).statusCode, 200);
+
+  const summary = await learning(server);
+  assert.deepEqual(summary.feedback, { good: 0, bad: 1, manual: 0, outcome: 1 }, 'nur der ohne Anfrage');
+  assert.match(learn.examplesText() ?? '', /passt nicht \(ohne Kontakt auf „Verloren“ gesetzt\): Headline/);
+  assert.deepEqual(summary.efficiency, { days: 30, profileFetches: 0, qualified: 2, perQualified: 0 });
+  const detail = (id: string) => server.inject({ method: 'GET', url: `/api/leads/${id}` }).then((r) => r.json() as LeadDetailResponse);
+  assert.equal((await detail(dismissed.id)).lead.feedback?.verdict, 'bad');
+
+  // Wieder geöffnet: das Team hat es sich anders überlegt.
+  assert.equal((await act(dismissed.id, 'reopened')).statusCode, 200);
+  assert.deepEqual((await learning(server)).feedback, { good: 0, bad: 0, manual: 0, outcome: 0 });
+  assert.equal((await detail(dismissed.id)).lead.feedback ?? null, null);
+  // Von Hand geht vor: 👍 am verworfenen Lead bleibt.
+  await feedback(server, dismissed.id, { verdict: 'good' });
+  assert.equal((await act(dismissed.id, 'lost')).statusCode, 200);
+  assert.deepEqual((await learning(server)).feedback, { good: 1, bad: 0, manual: 1, outcome: 0 });
+  await server.close();
+});
+
+test('Suchanfragen mit Ertrag: lange nicht gesuchte stehen hinten und sind markiert (09.11.)', () => {
+  const db = openDatabase(tempDataDir());
+  const now = Date.parse('2026-11-09T12:00:00Z');
+  const day = 24 * 60 * 60 * 1000;
+  const insert = db.prepare('INSERT INTO search_queries (key, label, qualified, good, bad, updated_at) VALUES (?, ?, ?, ?, 0, ?)');
+  insert.run('alt', 'Projektentwicklung · CEO · Deutschland', 50, 5, now - 20 * day);
+  insert.run('neu', 'Finanzdienstleister · Inhaber · Deutschland', 3, 1, now - day);
+  const { topQueries } = new LearningStore(db).summary(now);
+  assert.deepEqual(
+    topQueries.map((query) => [query.label, query.stale]),
+    [
+      ['Finanzdienstleister · Inhaber · Deutschland', false],
+      ['Projektentwicklung · CEO · Deutschland', true],
+    ],
+  );
+  assert.equal(topQueries[0].lastSearchedAt, now - day);
 });

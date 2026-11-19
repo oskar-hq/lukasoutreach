@@ -144,33 +144,41 @@ test('Sales-Navigator-Treffer (andere ID, ohne Kennung): Kontakt von Johannes wi
   assert.ok(unipile.requests.some((r) => r.path === '/api/v1/users/ACwSN1'), 'Profil wurde abgerufen');
 });
 
-test('Johannes nicht prüfbar (keine Unipile-Sitzung): neue Leads werden zurückgestellt, nicht als neu gezählt', async () => {
+test('Johannes nicht prüfbar (keine Unipile-Sitzung / getrennt): Suche läuft weiter wie bei „nicht verbunden“ (05.11.)', async () => {
+  // Bis 05.11. wurden dann alle neuen Leads zurückgestellt – Nutzer: „Wenn Nicks Account nicht funktioniert, wird er
+  // übersprungen und es geht weiter.“ Wie bei einem getrennten Account (Entscheidung 17.10.): Doppelte in Kauf nehmen.
   const { app, run, unipile, requestsTo } = await setup();
   unipile.linkedin.failAccount.acc_johannes = { status: 503, type: 'errors/no_client_session' };
 
   const result = await run();
   assert.equal(result.status, 'done', 'die Suche selbst läuft durch');
-  const deferred = result.leads.filter((entry) => entry.status === 'deferred');
-  assert.ok(deferred.length > 0);
-  for (const entry of deferred) assert.match(entry.note ?? '', /^Kontakte von Johannes nicht prüfbar \(keine aktive Unipile-Sitzung.*\) – beim nächsten Lauf dran$/);
-  assert.equal(result.leads.filter((entry) => entry.status === 'unique' || entry.profile).length, 0, 'kein Profilabruf');
-  assert.equal(funnelOf(result.leads).enriched, 0);
+  assert.ok(!result.leads.some((entry) => /nicht prüfbar/.test(entry.note ?? '')), 'nichts wegen Johannes zurückgestellt');
+  assert.ok(result.leads.some((entry) => entry.profile), 'Profile werden gelesen');
   // Bekannte Dubletten des Such-Accounts bleiben, was sie sind.
   assert.equal(result.leads.find((entry) => entry.id === 'ACoTEST4')?.status, 'connected');
 
   // Die Oberfläche zeigt den Hinweis unter „warnings“.
   const config = (await app.inject({ method: 'GET', url: '/api/lead-search/config' })).json() as LeadSearchConfig;
-  assert.ok(config.warnings.some((warning) => /Kontakte von Johannes konnten beim letzten Lauf nicht geprüft werden/.test(warning)), config.warnings.join(' | '));
+  assert.ok(config.warnings.some((warning) => /Kontakte von Johannes werden gerade nicht geprüft/.test(warning)), config.warnings.join(' | '));
 
-  // Fehler werden nicht zwischengespeichert: Ist der Account wieder da, prüft der nächste Lauf neu.
+  // Nicht zwischengespeichert: Ist der Account wieder da, prüft der nächste Lauf neu.
   delete unipile.linkedin.failAccount.acc_johannes;
   unipile.linkedin.relationsByAccount.acc_johannes = [];
   const before = requestsTo('/users/relations', 'acc_johannes').length;
-  const second = await run();
+  await run();
   assert.equal(requestsTo('/users/relations', 'acc_johannes').length, before + 1);
-  assert.ok(second.leads.some((entry) => entry.status === 'qualified' || entry.status === 'unrated'));
   const after = (await app.inject({ method: 'GET', url: '/api/lead-search/config' })).json() as LeadSearchConfig;
   assert.ok(!after.warnings.some((warning) => /Kontakte von Johannes/.test(warning)));
+});
+
+test('Johannes kurz gestört (Serverfehler): neue Leads werden zurückgestellt, nicht als neu gezählt', async () => {
+  const { run, unipile } = await setup();
+  unipile.linkedin.failAccount.acc_johannes = { status: 500, type: 'errors/unexpected' };
+  const result = await run();
+  assert.equal(result.status, 'done');
+  const deferred = result.leads.filter((entry) => entry.status === 'deferred');
+  assert.ok(deferred.length > 0);
+  for (const entry of deferred) assert.match(entry.note ?? '', /^Kontakte von Johannes nicht prüfbar \(.*\) – beim nächsten Lauf dran$/);
 });
 
 test('Gründer-Account bei Unipile nicht verbunden: keine Anfrage dafür, Suche läuft trotzdem weiter (Entscheidung 17.10.)', async () => {

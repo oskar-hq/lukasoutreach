@@ -44,6 +44,8 @@ export interface FakeUnipileOptions {
   searchStatus?: number;
   /** Ausgefallene Accounts (22.10.): Suche und Profilabruf über diese `account_id` antworten mit dem Status. */
   downAccounts?: Record<string, number>;
+  /** GET /linkedin/search/parameters (Region nachschlagen) scheitert für diese Accounts mit diesem Status (05.11.). */
+  failParameters?: Record<string, number>;
   people?: number;
   /** Ersetzt die Account-Liste von GET /accounts (Standard: ein startklarer LinkedIn-Account). */
   accounts?: object[];
@@ -72,6 +74,8 @@ export interface FakeLinkedInState {
   brokenChats: string[];
   /** 1:1-Unterhaltungen je Person (provider_id) für GET /chat_attendees/:id/chats. */
   attendeeChats: Record<string, { id: string; account_id: string; timestamp: string }[]>;
+  /** Für diese Personen (provider_id) antwortet GET /chat_attendees/:id/chats mit 404 „Attendee not found“ – wie live, solange es keine Unterhaltung gibt. */
+  unknownAttendees: string[];
   /** Kontakte je account_id (weitere Gründer-Accounts); fehlt der Account hier, gilt `relations`. Seitenweise per cursor. */
   relationsByAccount: Record<string, { member_id: string; public_identifier: string; created_at?: number }[]>;
   /** Gesendete, offene Anfragen je account_id für GET /users/invite/sent; fehlt der Account, gilt die Standardliste. */
@@ -80,6 +84,8 @@ export interface FakeLinkedInState {
   failAccount: Record<string, { status: number; type: string }>;
   /** Nächste Antwort auf POST /users/invite bzw. /chats… mit diesem Fehler. */
   failNext: { status: number; type: string } | null;
+  /** POST /users/invite über diesen Account (account_id im Body) scheitert immer mit diesem Fehler (z. B. Account gibt es nicht mehr). */
+  inviteFailByAccount: Record<string, { status: number; type: string }>;
   chats: number;
 }
 
@@ -114,9 +120,11 @@ export async function startFakeUnipile(options: FakeUnipileOptions = {}) {
     failAccount: {},
     messages: {},
     attendeeChats: {},
+    unknownAttendees: [],
     chatList: null,
     brokenChats: [],
     failNext: null,
+    inviteFailByAccount: {},
     chats: 0,
   };
   /** Liste seitenweise wie bei Unipile: cursor = Versatz, limit aus der Query. */
@@ -160,6 +168,10 @@ export async function startFakeUnipile(options: FakeUnipileOptions = {}) {
         ],
         cursor: null,
       });
+    }
+    const paramFail = options.failParameters?.[url.searchParams.get('account_id') ?? ''];
+    if (paramFail && req.method === 'GET' && path === '/linkedin/search/parameters') {
+      return send(paramFail, { status: paramFail, type: 'errors/disconnected_account', detail: 'The account appears to be disconnected from the provider service.' });
     }
     if (req.method === 'GET' && path === '/linkedin/search/parameters') {
       const wanted = url.searchParams.get('keywords') ?? '';
@@ -207,6 +219,8 @@ export async function startFakeUnipile(options: FakeUnipileOptions = {}) {
     }
     // ── Echte Aktionen (Formate laut unipile-node-sdk) ──
     if (req.method === 'POST' && path === '/users/invite') {
+      const always = linkedin.inviteFailByAccount[String((body as { account_id?: string } | null)?.account_id ?? '')];
+      if (always) return send(always.status, { status: always.status, type: always.type, detail: 'Fehler aus dem Test' });
       if (failNext()) return;
       return send(201, { object: 'UserInvitationSent', invitation_id: `inv-${requests.length}` });
     }
@@ -234,6 +248,9 @@ export async function startFakeUnipile(options: FakeUnipileOptions = {}) {
     const attendeeMatch = path.match(/^\/chat_attendees\/([^/]+)\/chats$/);
     if (attendeeMatch && req.method === 'GET') {
       const account = url.searchParams.get('account_id');
+      if (linkedin.unknownAttendees.includes(decodeURIComponent(attendeeMatch[1]))) {
+        return send(404, { status: 404, type: 'errors/resource_not_found', title: 'The requested resource were not found.', detail: 'Attendee not found' });
+      }
       const items = (linkedin.attendeeChats[decodeURIComponent(attendeeMatch[1])] ?? []).filter((chat) => !account || chat.account_id === account);
       return send(200, { object: 'ChatList', items: items.map((chat) => ({ object: 'Chat', type: 0, ...chat })), cursor: null });
     }

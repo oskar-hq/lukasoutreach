@@ -1,5 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { Button } from '../ui/Button';
+import { trackError } from '../../lib/telemetry';
+import { openFeedback } from '../feedback/feedbackBus';
 
 interface Props {
   children: ReactNode;
@@ -37,6 +39,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('Anzeigefehler', error, info.componentStack);
+    trackError(`Anzeigefehler: ${error.message}`);
     this.setState({ where: info.componentStack ?? null });
   }
 
@@ -81,6 +84,14 @@ export class ErrorBoundary extends Component<Props, State> {
           </pre>
         </details>
         <div className="mt-6 flex flex-wrap justify-center gap-3">
+          <Button
+            variant="ghost"
+            size="lg"
+            onClick={() => openFeedback({ prefill: `Anzeigefehler: ${this.state.error?.message ?? 'unbekannt'}\n\nWas ich gerade gemacht habe: ` })}
+            data-testid="error-report"
+          >
+            Fehler melden
+          </Button>
           <Button variant="ghost" size="lg" onClick={this.copy} data-testid="error-copy">
             {copied ? 'Kopiert' : 'Fehlerbericht kopieren'}
           </Button>

@@ -52,7 +52,10 @@ interface EventRow {
 const dateFormat = new Intl.DateTimeFormat('de-DE', { timeZone: TIME_ZONE, day: '2-digit', month: '2-digit', year: '2-digit' });
 const timeFormat = new Intl.DateTimeFormat('de-DE', { timeZone: TIME_ZONE, weekday: 'short', hour: '2-digit', minute: '2-digit' });
 const weekdayFormat = new Intl.DateTimeFormat('de-DE', { timeZone: TIME_ZONE, weekday: 'short' });
-const hourFormat = new Intl.DateTimeFormat('de-DE', { timeZone: TIME_ZONE, hour: '2-digit', hourCycle: 'h23' });
+// en-GB: nur die Zahl („16“) – de-DE liefert „16 Uhr“, `Number()` daraus ist NaN (bis 16.11. landete alles „ab 18 Uhr“).
+const hourFormat = new Intl.DateTimeFormat('en-GB', { timeZone: TIME_ZONE, hour: '2-digit', hourCycle: 'h23' });
+/** Stunde (0–23) in deutscher Zeit. */
+export const berlinHour = (at: number) => Number(hourFormat.format(at));
 
 const when = (at: number) => `${dateFormat.format(at)} ${timeFormat.format(at)}`;
 const day = (at: number) => dateFormat.format(at);
@@ -186,7 +189,7 @@ export class AssistantData {
         add(byLength, length < 300 ? 'unter 300 Zeichen' : length < 600 ? '300–600 Zeichen' : length < 1000 ? '600–1000 Zeichen' : 'über 1000 Zeichen', triggered);
         add(byQuestion, /\?\s*(\S+\s*){0,12}$/.test(message.text) ? 'endet mit einer Frage' : 'ohne Frage am Ende', triggered);
         add(byWeekday, weekdayFormat.format(message.at), triggered);
-        const hour = Number(hourFormat.format(message.at));
+        const hour = berlinHour(message.at);
         add(byHour, hour < 9 ? 'vor 9 Uhr' : hour < 12 ? '9–12 Uhr' : hour < 15 ? '12–15 Uhr' : hour < 18 ? '15–18 Uhr' : 'ab 18 Uhr', triggered);
       });
     }

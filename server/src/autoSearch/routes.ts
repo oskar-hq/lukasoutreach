@@ -34,6 +34,7 @@ const SHAPE_MESSAGES: Record<AutoSearchField, string> = {
   maxRounds: 'Bitte angeben, wie viele Suchläufe pro Tag höchstens laufen.',
   dailyBudgetEur: 'Bitte ein Tagesbudget in Euro angeben (oder keins).',
   kapitalanlagePercent: 'Bitte den Anteil Kapitalanlage in Prozent angeben (0 bis 100).',
+  randomMinutes: 'Bitte angeben, wie viele Minuten der Start zufällig später sein darf (0 bis 180).',
 };
 
 const PROFILE_FIELDS = ['keywords', 'positions', 'region', 'maxResults'] as const;
@@ -54,12 +55,13 @@ const UpdateShape = z.object({
   maxRounds: z.number().optional(),
   dailyBudgetEur: z.number().nullable().optional(),
   kapitalanlagePercent: z.number().optional(),
+  randomMinutes: z.number().optional(),
 });
 
 /** Feld zu einem zod-Fehlerpfad (`['profile', 'region']` → `profile.region`). */
 function fieldOf(path: readonly PropertyKey[]): AutoSearchField {
   const [first, second] = path;
-  if (first === 'enabled' || first === 'days' || first === 'time' || first === 'secondTime' || first === 'dailyTarget' || first === 'maxRounds' || first === 'dailyBudgetEur' || first === 'kapitalanlagePercent') return first;
+  if (first === 'enabled' || first === 'days' || first === 'time' || first === 'secondTime' || first === 'dailyTarget' || first === 'maxRounds' || first === 'dailyBudgetEur' || first === 'kapitalanlagePercent' || first === 'randomMinutes') return first;
   const sub = PROFILE_FIELDS.find((key) => key === second);
   return sub ? `profile.${sub}` : 'profile.keywords';
 }
@@ -97,7 +99,7 @@ export function registerAutoSearchRoutes(app: FastifyInstance, { planner }: { pl
       const field = fieldOf(parsed.error.issues[0]?.path ?? []);
       return sendError(reply, 400, 'invalid_request', SHAPE_MESSAGES[field], { field });
     }
-    const { enabled, days, time, secondTime, profile, dailyTarget, maxRounds, dailyBudgetEur, kapitalanlagePercent } = parsed.data;
+    const { enabled, days, time, secondTime, profile, dailyTarget, maxRounds, dailyBudgetEur, kapitalanlagePercent, randomMinutes } = parsed.data;
     const update: AutoSearchUpdate = {
       // Leerer Text = zweiter Termin aus.
       ...(secondTime !== undefined ? { secondTime: secondTime?.trim() ? secondTime.trim() : null } : {}),
@@ -105,6 +107,7 @@ export function registerAutoSearchRoutes(app: FastifyInstance, { planner }: { pl
       ...(maxRounds !== undefined ? { maxRounds } : {}),
       ...(dailyBudgetEur !== undefined ? { dailyBudgetEur } : {}),
       ...(kapitalanlagePercent !== undefined ? { kapitalanlagePercent } : {}),
+      ...(randomMinutes !== undefined ? { randomMinutes } : {}),
       enabled,
       days: [...new Set(days)].sort((a, b) => a - b) as Weekday[],
       time,

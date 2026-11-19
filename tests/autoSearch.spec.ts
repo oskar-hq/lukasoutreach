@@ -166,7 +166,7 @@ test('Gründer: sieht nur den eigenen Plan mit Standardwerten, Speichern schickt
   expect(fake.puts).toEqual([
     {
       founder: 'nick',
-      body: { enabled: true, days: [2, 3, 4, 5, 6], time: '06:30', secondTime: null, profile: { ...DEFAULT_SEARCH_PROFILE, region: 'Bayern', maxResults: 20 }, dailyTarget: null, maxRounds: 4, dailyBudgetEur: 10, kapitalanlagePercent: 50 },
+      body: { enabled: true, days: [2, 3, 4, 5, 6], time: '06:30', secondTime: null, profile: { ...DEFAULT_SEARCH_PROFILE, region: 'Bayern', maxResults: 20 }, dailyTarget: null, maxRounds: 4, dailyBudgetEur: 10, kapitalanlagePercent: 50, randomMinutes: 0 },
     },
   ]);
   await expect(page.getByTestId('auto-next')).toHaveText(NEXT_LONG);
@@ -254,6 +254,7 @@ test('Prüfung vor dem Speichern und Serverfehler am Feld', async ({ page }) => 
     maxRounds: 4,
     dailyBudgetEur: 10,
     kapitalanlagePercent: 50,
+    randomMinutes: 0,
   });
   expect(errors.filter((text) => !/status of 403\b/.test(text))).toEqual([]);
 });
@@ -301,7 +302,7 @@ test('Admin wählt den Gründer und speichert dessen Plan, letzter Lauf mit Satz
   await page.getByTestId('auto-save').click();
   await expect(page.getByTestId('auto-message')).toContainText('Gespeichert');
   expect(fake.puts).toEqual([
-    { founder: 'johannes', body: { enabled: true, days: [1, 3, 5], time: '07:00', secondTime: null, profile: { ...DEFAULT_SEARCH_PROFILE, region: 'Österreich' }, dailyTarget: null, maxRounds: 4, dailyBudgetEur: 10, kapitalanlagePercent: 50 } },
+    { founder: 'johannes', body: { enabled: true, days: [1, 3, 5], time: '07:00', secondTime: null, profile: { ...DEFAULT_SEARCH_PROFILE, region: 'Österreich' }, dailyTarget: null, maxRounds: 4, dailyBudgetEur: 10, kapitalanlagePercent: 50, randomMinutes: 0 } },
   ]);
   expect(errors).toEqual([]);
 });
@@ -417,6 +418,20 @@ test('Zweiter Termin am Tag: 2. Uhrzeit wird mitgeschickt, leer = aus', async ({
   await page.getByTestId('auto-save').click();
   await expect(page.getByTestId('auto-message')).toContainText('Gespeichert');
   expect(fake.puts.at(-1)!.body.secondTime).toBeNull();
+  expect(errors).toEqual([]);
+});
+
+test('Zufälliger Start (05.11.): Minuten nach der Uhrzeit werden mitgeschickt', async ({ page }) => {
+  const errors = trackErrors(page, expectedStatus);
+  const fake = await fakeAutoSearch(page, { schedules: [schedule('nick', { enabled: true, nextRunAt: NEXT })] });
+  await openAutoSearch(page);
+  await expect(page.getByTestId('auto-random-minutes')).toHaveValue('0');
+  await page.getByTestId('auto-time').fill('06:30');
+  await page.getByTestId('auto-random-minutes').fill('90');
+  await page.getByTestId('auto-save').click();
+  await expect(page.getByTestId('auto-message')).toContainText('Gespeichert');
+  expect(fake.puts.at(-1)!.body.time).toBe('06:30');
+  expect(fake.puts.at(-1)!.body.randomMinutes).toBe(90);
   expect(errors).toEqual([]);
 });
 

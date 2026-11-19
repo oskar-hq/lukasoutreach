@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { ArrowLeft, ArrowUpRight, CalendarCheck, ChevronDown, Search, Send } from 'lucide-react';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { workingFounders } from '../../../shared/auth';
-import type { ConversationSummary } from '../../../shared/leads';
+import { CLOSED_LEAD_STAGES, type ConversationSummary } from '../../../shared/leads';
 import { cn } from '../../lib/cn';
 import { useMediaQuery } from '../../lib/gesture';
 import { FOUNDERS } from '../../data/founders';
@@ -38,9 +38,13 @@ function isActive(entry: ConversationSummary): boolean {
   return (entry.replies ?? (entry.awaitingReply ? 1 : 0)) > 0;
 }
 
-/** Wartet auf eine Antwort von dir: offene Antwort in einem Chat über deinen Account. */
+/**
+ * Wartet auf eine Antwort von dir: offene Antwort in einem Chat über deinen Account. Nicht bei „Verloren“ oder
+ * „Übergeben“ (09.11.: „5 warten im Chat, aber nur 1 Antwort in den Aufgaben“ – die anderen hatten abgesagt). Genau
+ * wie die Antwort-Aufgaben im Tagesstapel.
+ */
 function waitsOn(entry: ConversationSummary, founder: FounderId): boolean {
-  return entry.awaitingReply && chatAccount(entry) === founder;
+  return entry.awaitingReply && !CLOSED_LEAD_STAGES.includes(entry.lead.stage) && chatAccount(entry) === founder;
 }
 
 /** „Nick“ → „Nicks“, „Johannes“ → „Johannes'“ (Genitiv ohne zweites s). */
