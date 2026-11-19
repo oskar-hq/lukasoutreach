@@ -954,6 +954,12 @@ export function ensureInstanceSchema(db: Database): void {
     );
     CREATE INDEX IF NOT EXISTS lead_imports_status ON lead_imports (status, queued_at);
     CREATE INDEX IF NOT EXISTS lead_imports_identifier ON lead_imports (identifier);
+    CREATE TABLE IF NOT EXISTS instance_prompts (
+      key        TEXT PRIMARY KEY,
+      text       TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      updated_by TEXT
+    );
   `);
 }
 

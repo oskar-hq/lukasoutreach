@@ -33,6 +33,8 @@ import { registerLeadRoutes } from './leads/routes.js';
 import { registerLinkedInRoutes } from './linkedin/routes.js';
 import { LeadImportQueue } from './leads/importQueue.js';
 import { registerLeadImportRoutes } from './leads/importRoutes.js';
+import { PromptStore, clearPromptSource, setPromptSource } from './ai/prompts.js';
+import { registerPromptRoutes } from './ai/promptRoutes.js';
 import { registerCrmRoutes } from './crm/routes.js';
 import { CrmService } from './crm/service.js';
 import { ConversationService } from './messages/conversation.js';
@@ -333,6 +335,11 @@ export function buildApp({
   });
   registerLeadImportRoutes(app, { queue: leadImports, leads, founderName, categories: () => config.leadCategories, detail: (id) => (leads.get(id) ? { lead: leads.get(id)!, events: leads.events(id) } : null) });
   app.decorate('leadImports', leadImports);
+  // Eigene KI-Prompts (Lukas-Instanz 19.11.): Quelle für alle KI-Aufrufer, Routen unter /api/settings/prompts.
+  const prompts = new PromptStore(db);
+  setPromptSource(prompts);
+  app.addHook('onClose', async () => clearPromptSource(prompts));
+  registerPromptRoutes(app, { store: prompts });
   if (scheduleBackups) leadImports.start();
   app.addHook('onClose', async () => leadImports.close());
   if (scheduleBackups) warmup.start();

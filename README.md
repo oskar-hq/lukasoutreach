@@ -506,6 +506,9 @@ Deal Value ändern (`shared/mcp.ts`, Code `server/src/mcp/`).
   (z. B. `{"testgruppe": "B"}`), `outreach_analysis` wertet mit `group_by: ["testgruppe"]` je Feldwert aus.
 - **Sender per Name (19.11.):** Die Claude-App zeigt Besitzer mit dem Namen des Gründer-Kontos (z. B. „Lukas“) und nimmt
   bei `owner` Name oder ID. Intern gibt es weiter zwei Plätze (`nick`, `johannes`); den Namen legt das Konto fest.
+- **Eigene KI-Prompts (19.11.):** `list_prompts` zeigt die Prompts für Einstufung, Vorprüfung, Texter,
+  Gesprächseinschätzung und KI-Assistent; `set_prompt` ersetzt einen (Zielgruppe, Kriterien, Ton) – die technischen
+  Ausgabe-Regeln hängt das Cockpit selbst an. `text: null` stellt den Standard wieder her. Nur Gründer und Admin.
 - **Trennen:** im selben Dialog („Trennen“) – das Token ist sofort ungültig. Zugriffstokens gelten 8 h, Claude erneuert
   sie selbst (bis 90 Tage ohne Nutzung).
 - **Voraussetzung:** öffentlich per https erreichbar (Caddy) und `PUBLIC_URL` gesetzt. nginx leitet `/mcp` und

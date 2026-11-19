@@ -175,6 +175,8 @@ Meta-Werbebibliothek (wer gerade Anzeigen schaltet, geht seit 07.10. markiert mi
 | POST | `/api/leads/import` | Bis 100 Links einreihen (`LeadImportRequest`) → 202 `LeadImportResponse` (je Link queued/duplicate/invalid); Warteschlange hält das Profil-Tageslimit des Accounts ein |
 | GET | `/api/leads/import/status` | Stand der Warteschlange → `LeadImportStatusResponse` |
 | PUT | `/api/leads/:id/fields` | Freie Felder setzen (`{ fields }`, leerer Wert löscht) → `LeadDetailResponse` |
+| GET | `/api/settings/prompts` | Eigene KI-Prompts je Instanz (Standard oder eigener Text) |
+| PUT | `/api/settings/prompts/:key` | `{ text \| null }` – eigener Prompt bzw. Standard (qualify, prescreen, writer, conversation, assistant) |
 | POST | `/api/leads/:id/events` | Aktion melden (Anfrage, Nachricht, Antwort, Termin, …) → Stufe nach `LEAD_ACTION_RULES` (auch `reopened` = „Wieder öffnen“ aus Verloren/Übergeben), 409 wenn unpassend; mit `clientId` nie doppelt gebucht |
 | GET | `/api/leads/unsent-invites` | Leads in „Anfrage gesendet“, deren Anfrage nicht über das Cockpit rausging (nur eingetragen) |
 | POST | `/api/leads/unsent-invites/requeue` | `{ ids }` → zurück auf „Neu“ (alte Buchung wird Notiz), `{ requeued, skipped }` |

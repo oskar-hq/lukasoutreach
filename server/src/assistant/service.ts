@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { customPrompt } from '../ai/prompts.js';
 import { z } from 'zod';
 import type { AssistantMessage, AssistantStreamEvent, AssistantToolName, AssistantToolUse } from '../../../shared/assistant.js';
 import { AUTH_FOUNDER_IDS, type AuthFounderId } from '../../../shared/auth.js';
@@ -32,6 +33,17 @@ Deine wichtigste Aufgabe ist, zwischen den Zeilen zu lesen. Zahlen allein sieht 
 Für einfache Fragen (einen Lead finden, wer hat was geschrieben) reicht die Suche – lies dann nicht alles.
 
 Antworte auf Deutsch, per du, klar gegliedert in Markdown (kurze Überschriften, Listen). Nennst du einen Lead, verlinke ihn genau so, wie er in den Werkzeug-Ergebnissen steht: [Vorname Nachname](lead:<id>) – erfinde keine IDs.`;
+
+/** Standardtext – für die Anzeige in `list_prompts`. */
+export const ASSISTANT_DEFAULT_PROMPT = SYSTEM_PROMPT;
+
+/** Wirksamer Prompt des Assistenten: eigener erster Absatz (wer ihr seid, wen ihr anschreibt), Rest bleibt. */
+function assistantSystemPrompt(): string {
+  const custom = customPrompt('assistant');
+  if (!custom) return SYSTEM_PROMPT;
+  const rest = SYSTEM_PROMPT.slice(SYSTEM_PROMPT.indexOf('\n\n'));
+  return `${custom.trim()}${rest}`;
+}
 
 /** Höchstens so viele Runden (Werkzeugaufrufe) je Antwort – Schutz vor Endlosschleifen und Kosten. */
 const MAX_ROUNDS = 30;
@@ -303,7 +315,7 @@ export class AssistantService {
         const params = {
           model,
           max_tokens: MAX_TOKENS,
-          system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+          system: [{ type: 'text', text: assistantSystemPrompt(), cache_control: { type: 'ephemeral' } }],
           tools: TOOLS,
           messages,
           // Verlauf und Werkzeug-Ergebnisse aus dem Cache – Folgefragen kosten nur einen Bruchteil.

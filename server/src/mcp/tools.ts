@@ -18,6 +18,7 @@ import { registerSystemTools } from './systemTools.js';
 import { registerFeedbackTools } from './feedbackTools.js';
 import { IMPORT_INSTRUCTIONS, registerImportTools } from './importTools.js';
 import { describeTemplate, registerTemplateTools } from './templateTools.js';
+import { registerPromptTools } from './promptTools.js';
 
 /**
  * Werkzeuge des MCP-Servers (Vertrag `shared/mcp.ts`) für ein angemeldetes Konto. Lesen wie der KI-Assistent
@@ -513,6 +514,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
   registerSettingsTools(server, call, nameOf);
   registerSystemTools(server, call);
   registerTemplateTools(server, call);
+  registerPromptTools(server, call);
   registerImportTools(server, call, resolveOwner, senders, (id, label) => `[${label}](${baseUrl}/?${MCP_LEAD_PARAM}=${encodeURIComponent(id)}) (lead_id: ${id})`);
   registerFeedbackTools(server, call, async (url) => {
     const response = await app.inject({ method: 'GET', url, headers: internalAuthHeaders(user.username) });
