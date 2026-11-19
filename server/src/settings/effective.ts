@@ -151,6 +151,7 @@ export function valueOf(key: SettingKey, config: Config, env: Env): SettingValue
     case 'FOLLOWUP_AFTER_DAYS': return config.tasks.followUpAfterDays;
     case 'MAX_FOLLOW_UPS': return config.tasks.maxFollowUps;
     case 'LEAD_FIELDS': return config.leadFields.join(', ');
+    case 'LEAD_CATEGORY_LIST': return config.leadCategories.join(', ');
     case 'NEW_LEADS_PER_DAY': return config.tasks.newLeadsPerDay;
     case 'INVITE_STALE_DAYS': return config.tasks.inviteStaleDays;
     case 'INVITE_NOTE': return config.tasks.inviteNote ? 'on' : 'off';

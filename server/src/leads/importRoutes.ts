@@ -47,8 +47,27 @@ const issues = (error: z.ZodError) => error.issues.map((issue) => issue.message)
 
 export function registerLeadImportRoutes(
   app: FastifyInstance,
-  { queue, leads, founderName, detail }: { queue: LeadImportQueue; leads: LeadStore; founderName: (id: AuthFounderId) => string; detail: (id: string) => LeadDetailResponse | null },
+  {
+    queue,
+    leads,
+    founderName,
+    detail,
+    categories = () => [],
+  }: {
+    queue: LeadImportQueue;
+    leads: LeadStore;
+    founderName: (id: AuthFounderId) => string;
+    detail: (id: string) => LeadDetailResponse | null;
+    /** Eigene Kategorien (`LEAD_CATEGORY_LIST`); leer = jede erlaubt. */
+    categories?: () => readonly string[];
+  },
 ): void {
+  /** Fehlertext, wenn die Kategorie nicht in der Liste steht – sonst null. */
+  const categoryProblem = (category: string | undefined): string | null => {
+    const allowed = categories();
+    if (!category || !allowed.length || allowed.includes(category.trim().toLowerCase())) return null;
+    return `Unbekannte Kategorie „${category}“ – erlaubt: ${allowed.join(', ')} (Einstellungen → Tagesstapel → Eigene Kategorien).`;
+  };
   app.post('/api/leads/add', async (request, reply) => {
     const parsed = ItemSchema.safeParse(request.body ?? {});
     if (!parsed.success) return sendError(reply, 400, 'invalid_request', issues(parsed.error));
@@ -59,6 +78,8 @@ export function registerLeadImportRoutes(
     if (denial) return sendError(reply, 403, 'not_allowed', denial);
     const identifier = profileIdentifier(parsed.data.profile);
     if (!identifier) return sendError(reply, 400, 'invalid_request', 'Bitte einen LinkedIn-Profil-Link (https://www.linkedin.com/in/…) angeben.');
+    const badCategory = categoryProblem(parsed.data.category);
+    if (badCategory) return sendError(reply, 400, 'invalid_request', badCategory);
     try {
       const result = await queue.addNow(parsed.data, identifier.toLowerCase(), owner, actorFor(user, owner));
       const body: LeadAddResponse = { status: result.status, leadId: result.lead.id, message: result.message };
@@ -81,10 +102,17 @@ export function registerLeadImportRoutes(
       if (denial) return sendError(reply, 403, 'not_allowed', denial);
     }
     const owner = (parsed.data.items[0]?.owner ?? fallback)!;
-    const results = queue.enqueue(
-      parsed.data.items.map((item) => ({ ...item, identifier: profileIdentifier(item.profile) })),
+    // Unbekannte Kategorie: dieser Link als Fehler, der Rest wird eingereiht (Reihenfolge der Antwort wie die Eingabe).
+    const problems = parsed.data.items.map((item) => categoryProblem(item.category));
+    const accepted = parsed.data.items.filter((_item, index) => !problems[index]);
+    const queuedResults = queue.enqueue(
+      accepted.map((item) => ({ ...item, identifier: profileIdentifier(item.profile) })),
       owner,
       actorFor(user, owner),
+    );
+    let next = 0;
+    const results = parsed.data.items.map((item, index) =>
+      problems[index] ? { profile: item.profile.trim(), status: 'invalid' as const, message: problems[index]! } : queuedResults[next++],
     );
     const owners = [...new Set(parsed.data.items.map((item) => item.owner ?? fallback!))];
     const status = queue.status(owners, 0);

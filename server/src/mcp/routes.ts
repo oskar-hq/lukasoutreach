@@ -228,7 +228,7 @@ export function registerMcpRoutes(app: FastifyInstance, { config, db, leads, acc
     if (user.awaitingApproval) return reply.status(403).send({ error: 'forbidden', error_description: 'Dein Konto ist noch nicht freigegeben.' });
     const scope: AuthFounderId[] | null = authRole(user) === 'assistant' ? workingFounders(user) : null;
 
-    const server = createMcpServer({ app, user, scope, data, baseUrl: baseOf(request) });
+    const server = createMcpServer({ app, user, scope, data, baseUrl: baseOf(request), categories: config.leadCategories });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     reply.hijack();
     reply.raw.on('close', () => {

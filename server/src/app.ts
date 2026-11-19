@@ -331,7 +331,7 @@ export function buildApp({
     busy: () => store.active() !== undefined,
     minPauseMs: linkedinTest?.minPauseMs,
   });
-  registerLeadImportRoutes(app, { queue: leadImports, leads, founderName, detail: (id) => (leads.get(id) ? { lead: leads.get(id)!, events: leads.events(id) } : null) });
+  registerLeadImportRoutes(app, { queue: leadImports, leads, founderName, categories: () => config.leadCategories, detail: (id) => (leads.get(id) ? { lead: leads.get(id)!, events: leads.events(id) } : null) });
   app.decorate('leadImports', leadImports);
   if (scheduleBackups) leadImports.start();
   app.addHook('onClose', async () => leadImports.close());
