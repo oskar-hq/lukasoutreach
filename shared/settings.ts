@@ -190,6 +190,7 @@ export const SETTING_KEYS = [
   'SLACK_WEBHOOK_URL',
   'FOLLOWUP_AFTER_DAYS',
   'MAX_FOLLOW_UPS',
+  'LEAD_FIELDS',
   'NEW_LEADS_PER_DAY',
   'INVITE_STALE_DAYS',
   'LOST_DELETE_DAYS',
@@ -557,6 +558,15 @@ export const SETTINGS: readonly SettingDefinition[] = [
 
   // ── Tagesstapel ──
   { key: 'FOLLOWUP_AFTER_DAYS', group: 'tasks', label: 'Follow-up nach Tagen', help: 'So viele Tage ohne Antwort, dann ist ein Follow-up fällig.', type: 'integer', min: 1, max: 60 },
+  {
+    // Lukas-Instanz 19.11.: freie Felder der Leads (Listen-Import) als Platzhalter in Vorlagen.
+    key: 'LEAD_FIELDS',
+    group: 'tasks',
+    label: 'Freie Felder der Leads',
+    help: 'Komma-Liste, z. B. „welle, testgruppe, fit, aufhaenger, firma_stage“. Jedes Feld ist in Vorlagen als Platzhalter nutzbar ({{aufhaenger}}) und wird aus dem Lead gefüllt. „kategorie“ gibt es immer.',
+    type: 'text',
+    pattern: '^\\s*([a-z][a-z0-9_]{0,39}\\s*(,\\s*[a-z][a-z0-9_]{0,39}\\s*)*)?$',
+  },
   { key: 'MAX_FOLLOW_UPS', group: 'tasks', label: 'Höchstens Follow-ups', help: 'Danach steht der Lead unter „braucht Aufmerksamkeit“.', type: 'integer', min: 0, max: 10 },
   { key: 'NEW_LEADS_PER_DAY', group: 'tasks', label: 'Neue Leads pro Tag', help: 'Je Gründer: so viele Karten „Neuer Lead“ zeigt der Tagesstapel am Tag (passt zum LinkedIn-Tageslimit). Die automatische Suche begrenzt das nicht – sie sucht höchstens Läufe × Profile pro Lauf und bis zu den Grenzen der LinkedIn-Accounts.', type: 'integer', min: 0, max: 100 },
   {

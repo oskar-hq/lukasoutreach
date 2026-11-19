@@ -493,6 +493,10 @@ Deal Value ändern (`shared/mcp.ts`, Code `server/src/mcp/`).
   Profil-Tageslimit des Accounts ein (Einstellungen → LinkedIn → Grenzen, höchstens 100); ist es voll, geht es am
   nächsten Tag weiter. Mehrere Personen derselben Firma sind erlaubt. HTTP: `POST /api/leads/add`, `POST /api/leads/import`,
   `GET /api/leads/import/status`, `PUT /api/leads/:id/fields` (`shared/leadImport.ts`).
+- **Vorlagen per Chat (19.11.):** `create_template`, `update_template`, `delete_template` – gleiche Regeln wie
+  Einstellungen → Vorlagen. Eigene Platzhalter aus freien Feldern: unter Einstellungen → Tagesstapel → „Freie Felder der
+  Leads“ (`LEAD_FIELDS`, z. B. `welle, testgruppe, aufhaenger`) eintragen, dann ist `{{aufhaenger}}` erlaubt und wird aus
+  dem Lead gefüllt; `{{kategorie}}` gibt es immer.
 - **Trennen:** im selben Dialog („Trennen“) – das Token ist sofort ungültig. Zugriffstokens gelten 8 h, Claude erneuert
   sie selbst (bis 90 Tage ohne Nutzung).
 - **Voraussetzung:** öffentlich per https erreichbar (Caddy) und `PUBLIC_URL` gesetzt. nginx leitet `/mcp` und

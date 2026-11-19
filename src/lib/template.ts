@@ -7,7 +7,8 @@ import { DEFAULT_TOPIC, hiringRoleText, metaPauseText, metaStopText, type Templa
 export type VariableKey = 'vorname' | 'firma' | 'stelle' | 'thema' | 'grussformel' | 'metapause' | 'metastopp';
 
 export interface TemplateVariable {
-  key: VariableKey;
+  /** Feste Variable (`VariableKey`) oder freies Feld des Leads (Lukas-Instanz 19.11., z. B. „aufhaenger“). */
+  key: VariableKey | (string & {});
   label: string;
   value: string;
 }
@@ -48,9 +49,26 @@ export function variablesForCockpitLead(lead: CockpitLead): TemplateVariable[] {
     // Nur mit Hiring-Signal anbieten – der Vorschlag im Backend füllt {{stelle}} immer (`hiringRoleText`).
     stelle: lead.hiring ? hiringRoleText(lead.hiring.role) : '',
   };
-  return (Object.keys(values) as VariableKey[])
+  const fixed = (Object.keys(values) as VariableKey[])
     .filter((key) => values[key])
-    .map((key) => ({ key, label: LABELS[key], value: values[key]! }));
+    .map((key): TemplateVariable => ({ key, label: LABELS[key], value: values[key]! }));
+  // Freie Felder (Lukas-Instanz 19.11., `CockpitLead.fields`): {{aufhaenger}} usw. – feste Variablen gehen vor.
+  const free = Object.entries(lead.fields ?? {})
+    .filter(([key, value]) => value && !(key in LABELS))
+    .map(([key, value]): TemplateVariable => ({ key, label: key, value }));
+  return [...fixed, ...free];
+}
+
+/**
+ * Zusätzlich erlaubte Platzhalter (freie Felder, `TemplatesResponse.fieldPlaceholders`) – setzt der TemplatesProvider
+ * nach dem Laden; die Prüfung in Einstellungen → Vorlagen liest sie.
+ */
+let fieldPlaceholderList: string[] = [];
+export function setFieldPlaceholders(list: readonly string[] | undefined): void {
+  fieldPlaceholderList = [...(list ?? [])];
+}
+export function fieldPlaceholders(): readonly string[] {
+  return fieldPlaceholderList;
 }
 
 /**
@@ -89,7 +107,7 @@ export function fillTemplate(template: string, variables: TemplateVariable[]): s
 export interface HighlightRange {
   start: number;
   end: number;
-  key: VariableKey;
+  key: TemplateVariable['key'];
 }
 
 /** Findet die eingesetzten Variablenwerte im (ggf. bearbeiteten) Text. */

@@ -3,6 +3,12 @@
 > Nur der Backend-Agent schreibt hier. Kurz halten, bei jedem Push aktualisieren, Erledigtes nach einer Woche löschen.
 
 ## Woran ich arbeite
+- **`claude/exciting-planck-euf6bn` (19.11., Lukas Punkt 3)** – Vorlagen per MCP: `mcp/templateTools.ts` (`create_template`,
+  `update_template`, `delete_template`, `template_placeholders`), `list_templates` mit Kategorie und Platzhaltern.
+  Einstellung `LEAD_FIELDS` (Komma-Liste) → `TemplatesResponse.fieldPlaceholders` (+ immer `kategorie`), erlaubte
+  Platzhalter in `textProblem`, Vorschlag füllt sie aus `lead.fields`. `unknownPlaceholders(text, extra)` und
+  `renderTemplate` erkennen jetzt `[a-z][a-z0-9_]*`. Frontend (minimal, Ausnahme): Prüfung in Einstellungen → Vorlagen
+  kennt die freien Felder, Karten füllen sie (`variablesForCockpitLead`). Tests `templateFields.test.ts`, `mcp.test.ts`.
 - **`claude/exciting-planck-euf6bn` (19.11., Lukas Punkt 2)** – Einstellung `ONE_LEAD_PER_COMPANY` (on/off, Standard on,
   Lead-Suche): aus = Firmen-Dubletten im Runner abgeschaltet (`onePerCompany`). Test `companyDuplicates.test.ts`.
 - **`claude/exciting-planck-euf6bn` (19.11., Lukas: „Cockpit als Sendemaschine“, Punkt 1 seiner Liste)** – Listen-Import:

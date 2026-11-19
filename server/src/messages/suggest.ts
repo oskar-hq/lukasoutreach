@@ -127,6 +127,8 @@ export class SuggestionService {
       metapause: metaPauseText(lead.metaAds?.lastStop, now),
       metastopp: metaStopText(lead.metaAds?.lastStop, now),
       stelle: hiringRoleText(lead.hiring?.role),
+      // Freie Felder (Lukas-Instanz 19.11.) – {{aufhaenger}} usw.; feste Platzhalter gehen vor.
+      ...Object.fromEntries(Object.entries(lead.fields ?? {}).filter(([key]) => !['vorname', 'firma', 'thema', 'grussformel', 'metapause', 'metastopp', 'stelle'].includes(key))),
     };
     const draft = this.draft(lead, events, request);
     const text = renderTemplate(draft.text, values);

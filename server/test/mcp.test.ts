@@ -397,3 +397,23 @@ test('Claude-App: Leads aus einer Liste – add_lead, import_leads, import_statu
     await client.close();
   }
 });
+
+test('Claude-App: Vorlagen anlegen, ändern, löschen (Lukas-Instanz 19.11.)', async () => {
+  const app = mcpApp({ LEAD_FIELDS: 'aufhaenger' });
+  const { tokens } = await connect(app);
+  const client = await mcpClient(app, tokens.access_token);
+  try {
+    const listed = textOf(await client.callTool({ name: 'list_templates', arguments: {} }));
+    assert.match(listed, /^Platzhalter: .*\{\{aufhaenger\}\}, \{\{kategorie\}\}/);
+    const created = textOf(await client.callTool({ name: 'create_template', arguments: { category: 'first_greenfield', name: 'VC · Funding', text: 'Hi {{vorname}}, {{aufhaenger}}' } }));
+    assert.match(created, /^Angelegt:\n### (\S+) · VC · Funding/);
+    const id = created.match(/### (\S+) ·/)![1];
+    const updated = textOf(await client.callTool({ name: 'update_template', arguments: { template_id: id, text: 'Hallo {{vorname}}, {{aufhaenger}}!' } }));
+    assert.match(updated, /Hallo \{\{vorname\}\}, \{\{aufhaenger\}\}!/);
+    const bad = await client.callTool({ name: 'update_template', arguments: { template_id: id, text: 'Hi {{unbekannt}}' } });
+    assert.equal(bad.isError, true);
+    assert.match(textOf(await client.callTool({ name: 'delete_template', arguments: { template_id: id } })), /gelöscht/);
+  } finally {
+    await client.close();
+  }
+});

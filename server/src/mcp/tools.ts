@@ -9,7 +9,7 @@ import { USAGE_REPORT_DAYS_DEFAULT, USAGE_REPORT_DAYS_MAX } from '../../../share
 import { LEAD_STAGES, LEAD_STAGE_LABELS, type CockpitLead, type LeadDetailResponse } from '../../../shared/leads.js';
 import type { LinkedInStatusResponse } from '../../../shared/linkedin.js';
 import { MCP_LEAD_PARAM } from '../../../shared/mcp.js';
-import type { TemplatesResponse } from '../../../shared/messages.js';
+import { TEMPLATE_PLACEHOLDERS, type TemplatesResponse } from '../../../shared/messages.js';
 import { ATTENTION_LABELS, TASK_TYPE_LABELS, type AttentionReason, type TasksResponse } from '../../../shared/tasks.js';
 import { CONVERSATIONS_MAX_LIMIT, type AssistantData } from '../assistant/data.js';
 import { internalAuthHeaders } from '../auth/auth.js';
@@ -17,6 +17,7 @@ import { SETTINGS_INSTRUCTIONS, registerSettingsTools } from './settingsTools.js
 import { registerSystemTools } from './systemTools.js';
 import { registerFeedbackTools } from './feedbackTools.js';
 import { IMPORT_INSTRUCTIONS, registerImportTools } from './importTools.js';
+import { describeTemplate, registerTemplateTools } from './templateTools.js';
 
 /**
  * Werkzeuge des MCP-Servers (Vertrag `shared/mcp.ts`) für ein angemeldetes Konto. Lesen wie der KI-Assistent
@@ -66,7 +67,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
   const linkOf = (lead: CockpitLead) => `[${lead.person.firstName} ${lead.person.lastName}](${baseUrl}/?${MCP_LEAD_PARAM}=${encodeURIComponent(lead.id)})`;
 
   /** Route des Cockpits im Namen des Kontos aufrufen. */
-  const call = async <T>(method: 'GET' | 'POST' | 'PATCH' | 'PUT', url: string, payload?: object): Promise<{ ok: true; body: T } | { ok: false; message: string }> => {
+  const call = async <T>(method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', url: string, payload?: object): Promise<{ ok: true; body: T } | { ok: false; message: string }> => {
     const response = await app.inject({ method, url, ...(payload ? { payload } : {}), headers: internalAuthHeaders(user.username) });
     const body = response.json() as T & { error?: { message?: string } | string };
     if (response.statusCode >= 400) {
@@ -272,13 +273,15 @@ export function createMcpServer(ctx: McpContext): McpServer {
     'list_templates',
     {
       title: 'Vorlagen',
-      description: 'Nachrichten-Vorlagen des Teams (Erstnachrichten Greenfield/Reactivation, Follow-ups je Stufe, Notiz zur Anfrage) mit ID und Text. Platzhalter wie {{vorname}} selbst füllen.',
+      description: 'Nachrichten-Vorlagen des Teams (Erstnachrichten, Follow-ups je Stufe, Notiz zur Anfrage) mit ID, Kategorie und Text, dazu die erlaubten Platzhalter. Platzhalter wie {{vorname}} oder freie Felder wie {{aufhaenger}} (Werte in lead_detail) selbst füllen. Ändern mit create_template, update_template, delete_template.',
       annotations: READ,
     },
     async () => {
       const result = await call<TemplatesResponse>('GET', '/api/templates');
       if (!result.ok) return fail(result.message);
-      return ok(result.body.templates.map((template) => `### ${template.id} · ${template.name}${template.stage ? ` (Follow-up ${template.stage})` : ''}\n${template.description}\n\n${template.text}`).join('\n\n'));
+      const fields = result.body.fieldPlaceholders ?? [];
+      const header = `Platzhalter: ${[...TEMPLATE_PLACEHOLDERS, ...fields].map((key) => `{{${key}}}`).join(', ')}`;
+      return ok([header, ...result.body.templates.map(describeTemplate)].join('\n\n'));
     },
   );
 
@@ -473,6 +476,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
   // ── Einstellungen (31.10.) ──────────────────────────────────────────────
   registerSettingsTools(server, call);
   registerSystemTools(server, call);
+  registerTemplateTools(server, call);
   registerImportTools(server, call, (id, label) => `[${label}](${baseUrl}/?${MCP_LEAD_PARAM}=${encodeURIComponent(id)}) (lead_id: ${id})`);
   registerFeedbackTools(server, call, async (url) => {
     const response = await app.inject({ method: 'GET', url, headers: internalAuthHeaders(user.username) });
