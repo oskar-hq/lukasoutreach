@@ -13,7 +13,7 @@ import {
   type TemplateSegment,
   type TemplatesResponse,
 } from '../../../shared/messages.js';
-import type { Config } from '../config.js';
+import { fieldPlaceholders, type Config } from '../config.js';
 import type { Database } from '../db/database.js';
 import type { LeadStore } from '../leads/leadStore.js';
 import { SuggestError, SuggestionService } from './suggest.js';
@@ -46,10 +46,10 @@ function sendError(reply: FastifyReply, status: number, code: MessagesErrorCode 
 }
 
 /** Gleiche Regeln für neue und geänderte Texte: bekannte Platzhalter, Notiz zur Vernetzungsanfrage höchstens 300 Zeichen. */
-function textProblem(kind: MessageKind, text: string): string | null {
-  const unknown = unknownPlaceholders(text);
+function textProblem(kind: MessageKind, text: string, extra: readonly string[] = []): string | null {
+  const unknown = unknownPlaceholders(text, extra);
   if (unknown.length) {
-    const allowed = TEMPLATE_PLACEHOLDERS.map((key) => `{{${key}}}`).join(', ');
+    const allowed = [...TEMPLATE_PLACEHOLDERS, ...extra].map((key) => `{{${key}}}`).join(', ');
     return `Unbekannte Platzhalter: ${unknown.map((key) => `{{${key}}}`).join(', ')}. Erlaubt sind ${allowed}.`;
   }
   if (kind === 'invite_note' && text.length > INVITE_NOTE_LIMIT) {
@@ -70,7 +70,7 @@ export function registerMessageRoutes(app: FastifyInstance, { config, db, leads,
   const templates = new TemplateStore(db);
   const suggestions = new SuggestionService({ config, templates, anthropicBaseURL });
 
-  app.get('/api/templates', async (): Promise<TemplatesResponse> => ({ templates: templates.list() }));
+  app.get('/api/templates', async (): Promise<TemplatesResponse> => ({ templates: templates.list(), fieldPlaceholders: fieldPlaceholders(config) }));
 
   app.put('/api/templates/:id', async (request, reply) => {
     const params = IdParams.safeParse(request.params);
@@ -78,7 +78,7 @@ export function registerMessageRoutes(app: FastifyInstance, { config, db, leads,
     if (!current) return sendError(reply, 404, 'not_found', 'Vorlage nicht gefunden.');
     const body = UpdateSchema.safeParse(request.body ?? {});
     if (!body.success) return sendError(reply, 400, 'invalid_template', body.error.issues.map((issue) => issue.message).join(' '));
-    const problem = textProblem(current.kind, body.data.text);
+    const problem = textProblem(current.kind, body.data.text, fieldPlaceholders(config));
     if (problem) return sendError(reply, 400, 'invalid_template', problem);
     const updated = templates.update(current.id, body.data, request.authUser?.username ?? null);
     request.log.info({ template: current.id, by: request.authUser?.username ?? null }, 'Vorlage geändert');
@@ -100,7 +100,7 @@ export function registerMessageRoutes(app: FastifyInstance, { config, db, leads,
     const body = CreateSchema.safeParse(request.body ?? {});
     if (!body.success) return sendError(reply, 400, 'invalid_template', body.error.issues.map((issue) => issue.message).join(' '));
     const category = TEMPLATE_CATEGORIES.find((entry) => entry.id === body.data.category)!;
-    const problem = textProblem(category.kind, body.data.text);
+    const problem = textProblem(category.kind, body.data.text, fieldPlaceholders(config));
     if (problem) return sendError(reply, 400, 'invalid_template', problem);
     try {
       const created = templates.create(category.id, body.data, request.authUser?.username ?? null);

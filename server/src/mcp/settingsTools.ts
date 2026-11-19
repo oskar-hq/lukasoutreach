@@ -27,7 +27,7 @@ type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: bo
 const ok = (text: string): ToolResult => ({ content: [{ type: 'text', text }] });
 const fail = (text: string): ToolResult => ({ content: [{ type: 'text', text }], isError: true });
 
-export type CockpitCall = <T>(method: 'GET' | 'POST' | 'PATCH' | 'PUT', url: string, payload?: object) => Promise<{ ok: true; body: T } | { ok: false; message: string }>;
+export type CockpitCall = <T>(method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', url: string, payload?: object) => Promise<{ ok: true; body: T } | { ok: false; message: string }>;
 
 /** Satz für Wünsche, die es (noch) nicht gibt – steht auch in den Server-Anweisungen. */
 export const NOT_BUILT_YET = 'Das ist leider noch nicht gebaut. Wende dich bitte an die Entwickler.';

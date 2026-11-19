@@ -67,6 +67,8 @@ export interface Config {
   minConfidence: number;
   /** Firmen-Dubletten in der Lead-Suche (`ONE_LEAD_PER_COMPANY` on/off, Standard on). */
   onePerCompany: boolean;
+  /** Freie Felder der Leads (`LEAD_FIELDS`, Komma-Liste) – Platzhalter in Vorlagen; `kategorie` kommt immer dazu. */
+  leadFields: string[];
   /** Tagesstapel (Vertrag `shared/tasks.ts`). */
   tasks: {
     followUpAfterDays: number;
@@ -353,6 +355,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     },
     minConfidence: Math.min(1, Math.max(0, number(env.QUALIFY_MIN_CONFIDENCE, 0.6))),
     onePerCompany: (text(env.ONE_LEAD_PER_COMPANY) ?? 'on').toLowerCase() !== 'off',
+    leadFields: [...new Set((text(env.LEAD_FIELDS) ?? '').split(',').map((entry) => entry.trim().toLowerCase()).filter((entry) => /^[a-z][a-z0-9_]{0,39}$/.test(entry)))],
     tasks: {
       followUpAfterDays: Math.max(1, Math.floor(number(env.FOLLOWUP_AFTER_DAYS, 2))),
       maxFollowUps: Math.max(0, Math.floor(number(env.MAX_FOLLOW_UPS, 3))),
@@ -521,4 +524,9 @@ export function replaceConfig<T extends object>(target: T, source: T): void {
     if (isPlain(t[key]) && isPlain(s[key])) replaceConfig(t[key] as object, s[key] as object);
     else t[key] = s[key];
   }
+}
+
+/** Platzhalter aus freien Feldern (Lukas-Instanz 19.11.): `LEAD_FIELDS` plus immer `kategorie`. */
+export function fieldPlaceholders(config: Pick<Config, 'leadFields'>): string[] {
+  return [...new Set([...config.leadFields, 'kategorie'])];
 }

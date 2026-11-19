@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { templateCategory, templateLetter, type MessageTemplate, type TemplateAudience, type TemplateSegment } from '../../shared/messages';
 import { ApiError, templatesApi } from '../lib/leadSearchApi';
 import { readableError } from '../lib/leadView';
+import { setFieldPlaceholders } from '../lib/template';
 
 type TemplatesState =
   | { status: 'loading' }
@@ -47,8 +48,10 @@ export function TemplatesProvider({ children }: { children: ReactNode }) {
       .finally(() => {
         if (id === requestId.current) setReloading(false);
       })
-      .then(({ templates }) => {
-        if (id === requestId.current) setState({ status: 'ready', templates });
+      .then(({ templates, fieldPlaceholders }) => {
+        if (id !== requestId.current) return;
+        setFieldPlaceholders(fieldPlaceholders);
+        setState({ status: 'ready', templates });
       })
       .catch((error: unknown) => {
         if (id !== requestId.current) return;

@@ -142,6 +142,11 @@ export interface MessageTemplate {
 
 export interface TemplatesResponse {
   templates: MessageTemplate[];
+  /**
+   * Zusätzlich erlaubte Platzhalter aus den freien Feldern der Leads (Lukas-Instanz 19.11., Einstellung `LEAD_FIELDS`,
+   * immer mit `kategorie`), z. B. ["aufhaenger", "welle"]. Gefüllt aus `CockpitLead.fields`. Fehlt bei älteren Servern.
+   */
+  fieldPlaceholders?: string[];
 }
 
 export interface UpdateTemplateRequest {
@@ -275,12 +280,12 @@ export interface MessageSuggestion {
 export type MessagesErrorCode = 'invalid_template' | 'not_found' | 'too_many_requests' | 'template_limit' | 'last_template';
 
 /** Platzhalter ersetzen; unbekannte bleiben stehen (fällt beim Lesen auf). */
-export function renderTemplate(text: string, values: Partial<Record<TemplatePlaceholder, string>>): string {
-  return text.replace(/\{\{\s*([a-z]+)\s*\}\}/g, (match, key: string) => values[key as TemplatePlaceholder] ?? match);
+export function renderTemplate(text: string, values: Partial<Record<TemplatePlaceholder, string>> & Record<string, string | undefined>): string {
+  return text.replace(/\{\{\s*([a-z][a-z0-9_]*)\s*\}\}/g, (match, key: string) => values[key] ?? match);
 }
 
 /** Platzhalter im Text, die es nicht gibt (z. B. Tippfehler „{{vornam}}“). */
-export function unknownPlaceholders(text: string): string[] {
-  const found = [...text.matchAll(/\{\{\s*([a-z]+)\s*\}\}/gi)].map((match) => match[1]);
-  return [...new Set(found.filter((key) => !(TEMPLATE_PLACEHOLDERS as readonly string[]).includes(key)))];
+export function unknownPlaceholders(text: string, extra: readonly string[] = []): string[] {
+  const found = [...text.matchAll(/\{\{\s*([a-z][a-z0-9_]*)\s*\}\}/gi)].map((match) => match[1]);
+  return [...new Set(found.filter((key) => !(TEMPLATE_PLACEHOLDERS as readonly string[]).includes(key) && !extra.includes(key)))];
 }

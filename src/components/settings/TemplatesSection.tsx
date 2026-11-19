@@ -26,7 +26,7 @@ import { cn } from '../../lib/cn';
 import { ApiError, settingsApi, templatesApi } from '../../lib/leadSearchApi';
 import { readableError } from '../../lib/leadView';
 import { EASE_OUT } from '../../lib/motion';
-import { unresolvedPlaceholders } from '../../lib/template';
+import { fieldPlaceholders, unresolvedPlaceholders } from '../../lib/template';
 import { formatRelative } from '../../lib/time';
 import { useHotkeys } from '../../lib/useHotkeys';
 import { useDemo } from '../../state/demo';
@@ -79,15 +79,16 @@ export function validateTemplate(
   if (!name.trim() && options.nameRequired !== false) errors.name = 'Bitte einen Namen eingeben.';
   else if (name.trim().length > NAME_MAX_LENGTH) errors.name = `Höchstens ${NAME_MAX_LENGTH} Zeichen.`;
   // Wie die Sperre beim Senden (`unresolvedPlaceholders`): alles in {{…}}, was kein bekannter Platzhalter ist.
+  const extra = fieldPlaceholders();
   const unknown = [
     ...new Set([
-      ...unknownPlaceholders(text),
-      ...unresolvedPlaceholders(text).filter((key) => !(TEMPLATE_PLACEHOLDERS as readonly string[]).includes(key)),
+      ...unknownPlaceholders(text, extra),
+      ...unresolvedPlaceholders(text).filter((key) => !(TEMPLATE_PLACEHOLDERS as readonly string[]).includes(key) && !extra.includes(key)),
     ]),
   ];
   if (!text.trim()) errors.text = 'Bitte einen Text eingeben.';
   else if (unknown.length) {
-    errors.text = `Unbekannter Platzhalter: ${unknown.map((key) => `{{${key}}}`).join(', ')} – erlaubt sind ${TEMPLATE_PLACEHOLDERS.map((key) => `{{${key}}}`).join(', ')}.`;
+    errors.text = `Unbekannter Platzhalter: ${unknown.map((key) => `{{${key}}}`).join(', ')} – erlaubt sind ${[...TEMPLATE_PLACEHOLDERS, ...extra].map((key) => `{{${key}}}`).join(', ')}.`;
   } else if (text.trim().length > limitFor(template.kind)) {
     errors.text =
       template.kind === 'invite_note'
