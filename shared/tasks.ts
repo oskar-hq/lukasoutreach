@@ -125,6 +125,8 @@ export interface TasksResponse {
   rules: {
     followUpAfterDays: number;
     maxFollowUps: number;
+    /** Follow-up-Zeitplan in Tagen nach der Erstnachricht (`FOLLOWUP_SCHEDULE_DAYS`, z. B. [6, 13]); fehlt/leer = gleiche Abstände. */
+    followUpScheduleDays?: number[];
     newLeadsPerDay: number;
     inviteStaleDays: number;
     /** false = Notiz zur Vernetzungsanfrage ausgeschaltet (`INVITE_NOTE=off`), Anfragen gehen ohne Notiz. Fehlt = an. */

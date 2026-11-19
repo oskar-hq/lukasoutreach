@@ -189,6 +189,7 @@ export const SETTING_KEYS = [
   'CLOSE_STATUS_ID',
   'SLACK_WEBHOOK_URL',
   'FOLLOWUP_AFTER_DAYS',
+  'FOLLOWUP_SCHEDULE_DAYS',
   'MAX_FOLLOW_UPS',
   'LEAD_FIELDS',
   'LEAD_CATEGORY_LIST',
@@ -576,6 +577,15 @@ export const SETTINGS: readonly SettingDefinition[] = [
     help: 'Komma-Liste, z. B. „startup_gruender, startup_marketing, vc_platform, vc_partner, sonstiges“. Steht im Feld „kategorie“ der Leads; Claude filtert und wertet danach aus. Leer = jede Kategorie erlaubt.',
     type: 'text',
     pattern: '^\\s*([a-z][a-z0-9_]{0,39}\\s*(,\\s*[a-z][a-z0-9_]{0,39}\\s*)*)?$',
+  },
+  {
+    // Lukas-Instanz 19.11.: Follow-ups an festen Tagen statt in gleichen Abständen.
+    key: 'FOLLOWUP_SCHEDULE_DAYS',
+    group: 'tasks',
+    label: 'Follow-ups an festen Tagen',
+    help: 'Tage nach der Erstnachricht, z. B. „6, 13“ = Follow-up 1 an Tag 6, Follow-up 2 an Tag 13 (höchstens drei, steigend). Gilt dann statt „Follow-up nach Tagen“ und „Höchstens Follow-ups“. Leer = gleiche Abstände.',
+    type: 'text',
+    pattern: '^\\s*([0-9]{1,3}\\s*(,\\s*[0-9]{1,3}\\s*){0,2})?$',
   },
   { key: 'MAX_FOLLOW_UPS', group: 'tasks', label: 'Höchstens Follow-ups', help: 'Danach steht der Lead unter „braucht Aufmerksamkeit“.', type: 'integer', min: 0, max: 10 },
   { key: 'NEW_LEADS_PER_DAY', group: 'tasks', label: 'Neue Leads pro Tag', help: 'Je Gründer: so viele Karten „Neuer Lead“ zeigt der Tagesstapel am Tag (passt zum LinkedIn-Tageslimit). Die automatische Suche begrenzt das nicht – sie sucht höchstens Läufe × Profile pro Lauf und bis zu den Grenzen der LinkedIn-Accounts.', type: 'integer', min: 0, max: 100 },
