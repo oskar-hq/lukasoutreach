@@ -6,9 +6,9 @@ import { lowEffort } from '../../ai/model.js';
 import { recordShadow, shouldShadow } from '../../ai/shadow.js';
 import { recordAiUsage } from '../../ai/usage.js';
 import { AdapterError, CancelledError } from '../../pipeline/adapter.js';
-import { QUALIFICATION_SYSTEM_PROMPT, describeLead } from '../../qualify/prompt.js';
+import { describeLead, qualificationSystemPrompt } from '../../qualify/prompt.js';
 import { QualificationOutputSchema, type QualificationOutput } from '../../qualify/schema.js';
-import { PRESCREEN_SYSTEM_PROMPT, PrescreenOutputSchema, describeHits, parsePrescreen } from '../../qualify/prescreen.js';
+import { PrescreenOutputSchema, prescreenSystemPrompt, describeHits, parsePrescreen } from '../../qualify/prescreen.js';
 
 export interface AnthropicQualifierOptions {
   apiKey: string;
@@ -62,7 +62,7 @@ export class AnthropicQualifier {
         {
           model,
           max_tokens: 2048,
-          system: systemBlocks(QUALIFICATION_SYSTEM_PROMPT, examples),
+          system: systemBlocks(qualificationSystemPrompt(), examples),
           messages: [{ role: 'user', content: describeLead(hit, profile) }],
           output_config: {
             format: zodOutputFormat(QualificationOutputSchema),
@@ -171,7 +171,7 @@ export class AnthropicQualifier {
           model,
           // Etwa 30 Token je Treffer plus Reserve.
           max_tokens: Math.min(16_000, 1_024 + hits.length * 80),
-          system: systemBlocks(PRESCREEN_SYSTEM_PROMPT, examples),
+          system: systemBlocks(prescreenSystemPrompt(), examples),
           messages: [{ role: 'user', content: describeHits(hits, region) }],
           output_config: { format: zodOutputFormat(PrescreenOutputSchema), ...lowEffort(model) },
         },

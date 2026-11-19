@@ -3,6 +3,10 @@
 > Nur der Backend-Agent schreibt hier. Kurz halten, bei jedem Push aktualisieren, Erledigtes nach einer Woche löschen.
 
 ## Woran ich arbeite
+- **`claude/exciting-planck-euf6bn` (19.11., Lukas Punkt 9)** – Eigene KI-Prompts je Instanz: `ai/prompts.ts` (`PromptStore`,
+  Tabelle `instance_prompts`, Modul-Quelle `customPrompt(key)`), Schlüssel qualify/prescreen/writer/conversation/assistant.
+  Feste Ausgabe-Regeln und Test-Marker hängen die Aufrufer an. Routen `GET/PUT /api/settings/prompts[/:key]` (Rechte wie
+  Einstellungen), MCP `list_prompts`, `set_prompt`. Keine Oberfläche. Tests `prompts.test.ts`, `mcp.test.ts`.
 - **`claude/exciting-planck-euf6bn` (19.11., Lukas Punkt 5)** – MCP und KI-Assistent zeigen Sender mit dem Namen des
   Gründer-Kontos (`accounts.founderName`, z. B. „Lukas“) statt „Nick“/„Johannes“; `owner` nimmt Name oder ID
   (`resolveOwner`). Die zwei internen Plätze `nick`/`johannes` bleiben (Umbau auf beliebig viele Sender = großer Umbau,

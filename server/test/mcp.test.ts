@@ -475,3 +475,21 @@ test('Claude-App: Sender per Name statt ID (Lukas-Instanz 19.11.)', async () => 
     await client.close();
   }
 });
+
+test('Claude-App: KI-Prompts lesen und ändern (Lukas-Instanz 19.11.)', async () => {
+  const app = mcpApp();
+  const { tokens } = await connect(app);
+  const client = await mcpClient(app, tokens.access_token);
+  try {
+    const listed = textOf(await client.callTool({ name: 'list_prompts', arguments: { key: 'writer' } }));
+    assert.match(listed, /^### writer · Texter \(Vorschläge\) · Standard/);
+    assert.match(listed, /Kapitalanlage-Vertriebe/);
+    const saved = textOf(await client.callTool({ name: 'set_prompt', arguments: { key: 'writer', text: 'Du schreibst kurze LinkedIn-Nachrichten an Startup-Gründer im DACH-Raum.' } }));
+    assert.match(saved, /eigener Text/);
+    assert.match(textOf(await client.callTool({ name: 'list_prompts', arguments: { key: 'writer' } })), /Startup-Gründer im DACH-Raum/);
+    const reset = textOf(await client.callTool({ name: 'set_prompt', arguments: { key: 'writer', text: null } }));
+    assert.match(reset, /· Standard/);
+  } finally {
+    await client.close();
+  }
+});
