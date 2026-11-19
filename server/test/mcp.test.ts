@@ -457,3 +457,21 @@ test('Claude-App: eigene Kategorien und freie Felder – filtern und auswerten (
     await client.close();
   }
 });
+
+test('Claude-App: Sender per Name statt ID (Lukas-Instanz 19.11.)', async () => {
+  const app = mcpApp();
+  const { tokens } = await connect(app);
+  const client = await mcpClient(app, tokens.access_token);
+  try {
+    const added = textOf(await client.callTool({ name: 'add_lead', arguments: { profile: 'sender-name', owner: 'Johannes' } }));
+    assert.match(added, /^Angelegt/);
+    const leadId = added.match(/lead_id: ([^)\s]+)/)![1];
+    const detail = textOf(await client.callTool({ name: 'lead_detail', arguments: { lead_id: leadId } }));
+    assert.match(detail.split('\n')[0], /· Johannes$/);
+    const unknown = await client.callTool({ name: 'add_lead', arguments: { profile: 'sender-x', owner: 'Lukas' } });
+    assert.equal(unknown.isError, true);
+    assert.match(textOf(unknown), /Unbekannter Sender „Lukas“ – bekannt: Nick \(nick\), Johannes \(johannes\)/);
+  } finally {
+    await client.close();
+  }
+});

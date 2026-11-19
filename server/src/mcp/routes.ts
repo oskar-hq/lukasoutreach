@@ -73,7 +73,8 @@ function oauthError(reply: FastifyReply, status: number, error: string, descript
 
 export function registerMcpRoutes(app: FastifyInstance, { config, db, leads, accounts }: { config: Config; db: Database; leads: LeadStore; accounts: AccountStore }) {
   const oauth = new McpOAuthStore(db);
-  const data = new AssistantData(leads, db);
+  const founderName = (id: AuthFounderId) => accounts.founderName(id);
+  const data = new AssistantData(leads, db, founderName);
 
   /** Öffentliche Adresse des Cockpits: `PUBLIC_URL`, sonst aus der Anfrage (lokal http, sonst https hinter Caddy). */
   const baseOf = (request: FastifyRequest) => {
@@ -228,7 +229,7 @@ export function registerMcpRoutes(app: FastifyInstance, { config, db, leads, acc
     if (user.awaitingApproval) return reply.status(403).send({ error: 'forbidden', error_description: 'Dein Konto ist noch nicht freigegeben.' });
     const scope: AuthFounderId[] | null = authRole(user) === 'assistant' ? workingFounders(user) : null;
 
-    const server = createMcpServer({ app, user, scope, data, baseUrl: baseOf(request), categories: config.leadCategories });
+    const server = createMcpServer({ app, user, scope, data, baseUrl: baseOf(request), categories: config.leadCategories, founderName });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     reply.hijack();
     reply.raw.on('close', () => {

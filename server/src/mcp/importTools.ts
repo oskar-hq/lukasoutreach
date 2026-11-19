@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { AUTH_FOUNDER_IDS } from '../../../shared/auth.js';
+import type { AuthFounderId } from '../../../shared/auth.js';
 import type { LeadDetailResponse } from '../../../shared/leads.js';
 import {
   LEAD_FIELD_KEY_PATTERN,
@@ -31,13 +31,26 @@ const fieldsSchema = z
   .describe('Freie Felder, z. B. {"welle": "1", "testgruppe": "B", "aufhaenger": "…"}. Namen klein: a–z, 0–9, _.');
 const itemShape = {
   profile: z.string().trim().min(1).max(500).describe('LinkedIn-Profil-Link (https://www.linkedin.com/in/…)'),
-  owner: z.enum(AUTH_FOUNDER_IDS).optional().describe('Besitzer (Sender); ohne Angabe das eigene Konto'),
+  owner: z.string().trim().min(1).max(80).optional().describe('Sender (Name oder ID, z. B. „Lukas“); ohne Angabe das eigene Konto'),
   category: z.string().trim().max(80).optional().describe('Kategorie, z. B. startup_gruender, vc_platform – steht im Feld „kategorie“'),
   note: z.string().trim().max(2000).optional().describe('Notiz in den Verlauf'),
   fields: fieldsSchema.optional(),
 };
 
-export function registerImportTools(server: McpServer, call: CockpitCall, linkOf: (id: string, label: string) => string): void {
+export function registerImportTools(
+  server: McpServer,
+  call: CockpitCall,
+  resolveOwner: (value: string) => AuthFounderId | null,
+  senders: string,
+  linkOf: (id: string, label: string) => string,
+): void {
+  /** Sender aus Name oder ID – wirft mit verständlichem Text, wenn unbekannt. */
+  const ownerOf = (value: string | undefined): AuthFounderId | undefined => {
+    if (!value) return undefined;
+    const owner = resolveOwner(value);
+    if (!owner) throw new Error(`Unbekannter Sender „${value}“ – bekannt: ${senders}.`);
+    return owner;
+  };
   server.registerTool(
     'add_lead',
     {
@@ -48,7 +61,13 @@ export function registerImportTools(server: McpServer, call: CockpitCall, linkOf
       annotations: WRITE,
     },
     async (input) => {
-      const result = await call<LeadAddResponse>('POST', '/api/leads/add', input);
+      let owner: AuthFounderId | undefined;
+      try {
+        owner = ownerOf(input.owner);
+      } catch (error) {
+        return fail((error as Error).message);
+      }
+      const result = await call<LeadAddResponse>('POST', '/api/leads/add', { ...input, owner });
       if (!result.ok) return fail(result.message);
       const { status, leadId, message } = result.body;
       return ok(`${status === 'created' ? 'Angelegt' : 'Dublette'}: ${message} ${linkOf(leadId, 'Im Cockpit öffnen')}`);
@@ -64,7 +83,13 @@ export function registerImportTools(server: McpServer, call: CockpitCall, linkOf
       annotations: WRITE,
     },
     async ({ items }) => {
-      const result = await call<LeadImportResponse>('POST', '/api/leads/import', { items });
+      let resolved;
+      try {
+        resolved = items.map((item) => ({ ...item, owner: ownerOf(item.owner) }));
+      } catch (error) {
+        return fail((error as Error).message);
+      }
+      const result = await call<LeadImportResponse>('POST', '/api/leads/import', { items: resolved });
       if (!result.ok) return fail(result.message);
       const body = result.body;
       const label = { queued: 'Warteschlange', duplicate: 'Dublette', invalid: 'Fehler' } as const;
@@ -84,14 +109,18 @@ export function registerImportTools(server: McpServer, call: CockpitCall, linkOf
       title: 'Stand des Imports',
       description: 'Was aus der Import-Warteschlange schon abgerufen ist: Zahlen je Ergebnis, Profilabrufe heute je Besitzer, Pause mit Grund und die letzten Einträge (neueste zuerst).',
       inputSchema: {
-        owner: z.enum(AUTH_FOUNDER_IDS).optional(),
+        owner: z.string().trim().min(1).max(80).optional().describe('Sender (Name oder ID)'),
         limit: z.number().int().min(1).max(200).optional().describe('So viele letzte Einträge (Standard 20)'),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ owner, limit }) => {
       const query = new URLSearchParams();
-      if (owner) query.set('owner', owner);
+      if (owner) {
+        const resolved = resolveOwner(owner);
+        if (!resolved) return fail(`Unbekannter Sender „${owner}“ – bekannt: ${senders}.`);
+        query.set('owner', resolved);
+      }
       if (limit) query.set('limit', String(limit));
       const result = await call<LeadImportStatusResponse>('GET', `/api/leads/import/status${query.size ? `?${query}` : ''}`);
       if (!result.ok) return fail(result.message);

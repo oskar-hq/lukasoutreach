@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { AUTH_FOUNDER_IDS, defaultFounderName } from '../../../shared/auth.js';
+import { AUTH_FOUNDER_IDS, defaultFounderName, type AuthFounderId } from '../../../shared/auth.js';
 import { AUTO_SEARCH_FOCUS_LABELS, type AutoSearchListResponse, type AutoSearchSchedule, type AutoSearchUpdate, type Weekday } from '../../../shared/autoSearch.js';
 import type { LinkedInAccountLimits, LinkedInAccountsResponse } from '../../../shared/linkedin.js';
 import type { UpdateStatusResponse } from '../../../shared/system.js';
@@ -85,10 +85,10 @@ function settingLine(definition: SettingDefinition, state: SettingState | undefi
 
 const WEEKDAY_LABELS: Record<Weekday, string> = { 1: 'Mo', 2: 'Di', 3: 'Mi', 4: 'Do', 5: 'Fr', 6: 'Sa', 7: 'So' };
 
-function scheduleLines(schedule: AutoSearchSchedule): string[] {
+function scheduleLines(schedule: AutoSearchSchedule, nameOf: (id: AuthFounderId) => string = defaultFounderName): string[] {
   const percent = schedule.kapitalanlagePercent ?? 50;
   return [
-    `### ${defaultFounderName(schedule.founder)} (founder ${schedule.founder})`,
+    `### ${nameOf(schedule.founder)} (founder ${schedule.founder})`,
     `- eingeschaltet (enabled): ${schedule.enabled ? 'ja' : 'nein'}`,
     `- Tage (days, 1 = Mo … 7 = So): ${schedule.days.map((day) => WEEKDAY_LABELS[day]).join(', ') || 'keine'}`,
     `- Uhrzeit (time): ${schedule.time} · zweiter Termin (second_time): ${schedule.secondTime ?? 'aus'}`,
@@ -124,7 +124,7 @@ function coerce(definition: SettingDefinition, value: string | number | boolean 
 const READ = { readOnlyHint: true, openWorldHint: false } as const;
 const WRITE = { readOnlyHint: false, destructiveHint: false, openWorldHint: false } as const;
 
-export function registerSettingsTools(server: McpServer, call: CockpitCall): void {
+export function registerSettingsTools(server: McpServer, call: CockpitCall, nameOf: (id: AuthFounderId) => string = defaultFounderName): void {
   server.registerTool(
     'find_settings',
     {
@@ -148,7 +148,7 @@ export function registerSettingsTools(server: McpServer, call: CockpitCall): voi
 
       lines.push('', '## Automatische Suche (Einstellungen → Automatische Suche)', 'Ändern mit change_auto_search (founder + nur die Felder, die sich ändern sollen).');
       const auto = await call<AutoSearchListResponse>('GET', '/api/auto-search');
-      if (auto.ok) for (const schedule of auto.body.schedules) lines.push(...scheduleLines(schedule));
+      if (auto.ok) for (const schedule of auto.body.schedules) lines.push(...scheduleLines(schedule, nameOf));
       else lines.push(`Nicht lesbar: ${auto.message}`);
 
       lines.push('', '## Tagesgrenzen je LinkedIn-Account (Einstellungen → Senden über LinkedIn)', 'Ändern mit change_account_limits (account_id + Grenzen, null = Standard; disabled: true schaltet den Account ganz ab – kein Traffic mehr darüber).');
@@ -157,7 +157,7 @@ export function registerSettingsTools(server: McpServer, call: CockpitCall): voi
       else if (!accounts.body.accounts.length) lines.push('Keine LinkedIn-Accounts verbunden.');
       else {
         for (const account of accounts.body.accounts) {
-          const who = account.assignedTo ? `Gründer-Account ${defaultFounderName(account.assignedTo)}` : account.warmup ? 'wird aufgewärmt' : 'Such-Account';
+          const who = account.assignedTo ? `Gründer-Account ${nameOf(account.assignedTo)}` : account.warmup ? 'wird aufgewärmt' : 'Such-Account';
           const defaults = account.limitDefaults;
           lines.push(
             `- **${account.name}** (account_id ${account.id}) · ${who}${account.disabled ? ' · **deaktiviert** (kein Traffic)' : ''} · Profile/Tag (profiles_per_day): ${limitText(account.limits?.profilesPerDay, defaults?.profilesPerDay)} · Suchtreffer/Tag (search_results_per_day): ${limitText(account.limits?.searchResultsPerDay, defaults?.searchResultsPerDay)} · Anfragen/Tag (invites_per_day): ${limitText(account.limits?.invitesPerDay, defaults?.invitesPerDay)}`,
@@ -236,7 +236,7 @@ export function registerSettingsTools(server: McpServer, call: CockpitCall): voi
       const list = await call<AutoSearchListResponse>('GET', '/api/auto-search');
       if (!list.ok) return fail(list.message);
       const current = list.body.schedules.find((schedule) => schedule.founder === input.founder);
-      if (!current) return fail(`Die automatische Suche von ${defaultFounderName(input.founder)} darfst du nicht ändern.`);
+      if (!current) return fail(`Die automatische Suche von ${nameOf(input.founder)} darfst du nicht ändern.`);
       const update: AutoSearchUpdate = {
         enabled: input.enabled ?? current.enabled,
         days: (input.days as Weekday[] | undefined) ?? current.days,
@@ -255,7 +255,7 @@ export function registerSettingsTools(server: McpServer, call: CockpitCall): voi
       };
       const saved = await call<AutoSearchSchedule>('PUT', `/api/auto-search/${input.founder}`, update);
       if (!saved.ok) return fail(saved.message);
-      return ok(['Gespeichert. Automatische Suche jetzt:', ...scheduleLines(saved.body)].join('\n'));
+      return ok(['Gespeichert. Automatische Suche jetzt:', ...scheduleLines(saved.body, nameOf)].join('\n'));
     },
   );
 

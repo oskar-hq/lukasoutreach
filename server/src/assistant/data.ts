@@ -95,6 +95,8 @@ export class AssistantData {
   constructor(
     private readonly leads: LeadStore,
     private readonly db: Database,
+    /** Anzeigename eines Senders (Name des Gründer-Kontos, z. B. „Lukas“) – Standard „Nick“/„Johannes“. */
+    private readonly founderName: (id: AuthFounderId) => string = defaultFounderName,
   ) {}
 
   /** Alle Leads im Sichtbereich mit ihrem Gesprächsverlauf. */
@@ -243,7 +245,7 @@ export class AssistantData {
       }
     };
     group('Nach Kategorie', (thread) => categoryOf(thread.lead));
-    group('Nach Gründer (Besitzer des Leads)', (thread) => defaultFounderName(thread.lead.owner));
+    group('Nach Gründer (Besitzer des Leads)', (thread) => this.founderName(thread.lead.owner));
     // Freie Felder (Lukas-Instanz 19.11.): z. B. drei Einstiege gegeneinander testen (Feld „testgruppe“).
     for (const field of options.groupBy ?? []) group(`Nach Feld „${field}“`, (thread) => thread.lead.fields?.[field] || '(leer)');
 
@@ -296,7 +298,7 @@ export class AssistantData {
     const limit = Math.min(CONVERSATIONS_MAX_LIMIT, Math.max(1, options.limit ?? 50));
     const page = matches.slice(offset, offset + limit);
     const header =
-      `Gespräche ${page.length ? offset + 1 : 0}–${offset + page.length} von ${matches.length} (Filter: ${outcome}${options.category ? `, ${(CATEGORY_LABELS as Record<string, string>)[options.category] ?? options.category}` : ''}${options.fields ? `, ${Object.entries(options.fields).map(([key, value]) => `${key}=${value}`).join(', ')}` : ''}${options.owner ? `, ${defaultFounderName(options.owner)}` : ''}). ` +
+      `Gespräche ${page.length ? offset + 1 : 0}–${offset + page.length} von ${matches.length} (Filter: ${outcome}${options.category ? `, ${(CATEGORY_LABELS as Record<string, string>)[options.category] ?? options.category}` : ''}${options.fields ? `, ${Object.entries(options.fields).map(([key, value]) => `${key}=${value}`).join(', ')}` : ''}${options.owner ? `, ${this.founderName(options.owner)}` : ''}). ` +
       (offset + page.length < matches.length ? `Weitere mit offset=${offset + page.length}.` : 'Das sind alle.') +
       '\n→ = eigene Nachricht (#n = Position in der Sequenz, Vorlage), ← = Antwort des Leads.';
     return { text: [header, ...page.map((thread) => this.transcript(thread, BATCH_MESSAGE_CHARS))].join('\n\n'), count: page.length, total: matches.length };
@@ -305,7 +307,7 @@ export class AssistantData {
   private transcript(thread: Thread, maxChars: number): string {
     const { lead } = thread;
     const lines = [
-      `### ${linkOf(lead)} · ${lead.company.name || 'Firma unbekannt'} · ${lead.person.position || lead.person.headline || ''} · ${categoryOf(lead)}${lead.score ? ` · Score ${lead.score.total}` : ''} · Stufe ${LEAD_STAGE_LABELS[lead.stage as LeadStage]} · ${defaultFounderName(lead.owner)}`,
+      `### ${linkOf(lead)} · ${lead.company.name || 'Firma unbekannt'} · ${lead.person.position || lead.person.headline || ''} · ${categoryOf(lead)}${lead.score ? ` · Score ${lead.score.total}` : ''} · Stufe ${LEAD_STAGE_LABELS[lead.stage as LeadStage]} · ${this.founderName(lead.owner)}`,
     ];
     const milestones: string[] = [];
     if (thread.invitedAt) milestones.push(`Anfrage ${day(thread.invitedAt)}${thread.inviteNote ? ` mit Notiz: „${oneLine(clip(thread.inviteNote, 400))}“` : ' ohne Notiz'}`);
@@ -363,7 +365,7 @@ export class AssistantData {
     if (!found.length) return 'Keine passenden Leads.';
     const lines = found
       .slice(0, limit)
-      .map((lead) => `- ${linkOf(lead)} · ${lead.company.name} · ${lead.person.position || lead.person.headline} · ${categoryOf(lead)} · Stufe ${LEAD_STAGE_LABELS[lead.stage]} · zuletzt aktiv ${day(lead.lastActivityAt)} · ${defaultFounderName(lead.owner)}${fieldsText(lead)}`);
+      .map((lead) => `- ${linkOf(lead)} · ${lead.company.name} · ${lead.person.position || lead.person.headline} · ${categoryOf(lead)} · Stufe ${LEAD_STAGE_LABELS[lead.stage]} · zuletzt aktiv ${day(lead.lastActivityAt)} · ${this.founderName(lead.owner)}${fieldsText(lead)}`);
     return [`${found.length} ${found.length === 1 ? 'Lead' : 'Leads'}${found.length > limit ? ` (die ${limit} zuletzt aktiven)` : ''}:`, ...lines].join('\n');
   }
 

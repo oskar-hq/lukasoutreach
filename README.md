@@ -504,6 +504,8 @@ Deal Value ändern (`shared/mcp.ts`, Code `server/src/mcp/`).
 - **Eigene Kategorien und Felder (19.11.):** Einstellungen → Tagesstapel → „Eigene Kategorien“ (`LEAD_CATEGORY_LIST`,
   z. B. `startup_gruender, vc_platform`). `find_leads` und `read_conversations` filtern nach `category` und `fields`
   (z. B. `{"testgruppe": "B"}`), `outreach_analysis` wertet mit `group_by: ["testgruppe"]` je Feldwert aus.
+- **Sender per Name (19.11.):** Die Claude-App zeigt Besitzer mit dem Namen des Gründer-Kontos (z. B. „Lukas“) und nimmt
+  bei `owner` Name oder ID. Intern gibt es weiter zwei Plätze (`nick`, `johannes`); den Namen legt das Konto fest.
 - **Trennen:** im selben Dialog („Trennen“) – das Token ist sofort ungültig. Zugriffstokens gelten 8 h, Claude erneuert
   sie selbst (bis 90 Tage ohne Nutzung).
 - **Voraussetzung:** öffentlich per https erreichbar (Caddy) und `PUBLIC_URL` gesetzt. nginx leitet `/mcp` und

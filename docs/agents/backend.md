@@ -3,6 +3,10 @@
 > Nur der Backend-Agent schreibt hier. Kurz halten, bei jedem Push aktualisieren, Erledigtes nach einer Woche löschen.
 
 ## Woran ich arbeite
+- **`claude/exciting-planck-euf6bn` (19.11., Lukas Punkt 5)** – MCP und KI-Assistent zeigen Sender mit dem Namen des
+  Gründer-Kontos (`accounts.founderName`, z. B. „Lukas“) statt „Nick“/„Johannes“; `owner` nimmt Name oder ID
+  (`resolveOwner`). Die zwei internen Plätze `nick`/`johannes` bleiben (Umbau auf beliebig viele Sender = großer Umbau,
+  nicht gemacht). Test `mcp.test.ts`.
 - **`claude/exciting-planck-euf6bn` (19.11., Lukas Punkt 7)** – Einstellung `FOLLOWUP_SCHEDULE_DAYS` (z. B. „6, 13“): Follow-up n
   an Tag n nach der Erstnachricht (Abstand ab letzter eigener Nachricht), Höchstzahl = Länge; `config.tasks.maxFollowUps`
   ist jetzt die wirksame Zahl, `maxFollowUpsSetting` der eingestellte Wert. Vertrag: `TasksResponse.rules.followUpScheduleDays?`.

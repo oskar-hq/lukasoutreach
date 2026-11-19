@@ -35,6 +35,8 @@ export interface McpContext {
   baseUrl: string;
   /** Eigene Kategorien (`LEAD_CATEGORY_LIST`); leer = nur die KI-Kategorien bekannt. */
   categories?: readonly string[];
+  /** Anzeigename eines Senders (Name des Gründer-Kontos, z. B. „Lukas“). */
+  founderName?: (id: AuthFounderId) => string;
 }
 
 const INSTRUCTIONS = `Outreach-Cockpit eines kleinen Teams, das über LinkedIn Kapitalanlage-Vertriebe und Finanzdienstleister anschreibt (früher auch Bauträger). Ablauf je Lead: Vernetzungsanfrage → Erstnachricht → Follow-ups → Antwort → Termin.
@@ -64,6 +66,13 @@ export function createMcpServer(ctx: McpContext): McpServer {
   const server = new McpServer({ name: 'outreach-cockpit', version: '1.0.0' }, { instructions: INSTRUCTIONS });
   const { app, user, scope, data, baseUrl } = ctx;
   const known = [...(ctx.categories ?? []), ...LEAD_CATEGORIES];
+  const nameOf = ctx.founderName ?? defaultFounderName;
+  /** Sender per ID („nick“) oder Name („Lukas“) – null = unbekannt. */
+  const resolveOwner = (value: string): AuthFounderId | null => {
+    const wanted = value.trim().toLowerCase();
+    return AUTH_FOUNDER_IDS.find((id) => id === wanted || nameOf(id).toLowerCase() === wanted) ?? null;
+  };
+  const senders = AUTH_FOUNDER_IDS.map((id) => `${nameOf(id)} (${id})`).join(', ');
   const categoryField = z
     .string()
     .trim()
@@ -119,8 +128,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
       const result = await call<TasksResponse>('GET', owner ? `/api/tasks?owner=${owner}` : '/api/tasks');
       if (!result.ok) return fail(result.message);
       const { tasks, attention, accountPaused } = result.body;
-      const lines = [`# Aufgaben (${owner === 'all' ? 'beide Gründer' : owner ? defaultFounderName(owner) : 'alle'})`];
-      if (accountPaused?.length) lines.push(`Pausiert (LinkedIn-Account nicht verbunden): ${accountPaused.map(defaultFounderName).join(', ')}`);
+      const lines = [`# Aufgaben (${owner === 'all' ? 'alle Sender' : owner ? nameOf(owner) : 'alle'})`];
+      if (accountPaused?.length) lines.push(`Pausiert (LinkedIn-Account nicht verbunden): ${accountPaused.map(nameOf).join(', ')}`);
       if (!tasks.length) lines.push('Nichts offen – alles erledigt.');
       for (const type of ['reply', 'followup', 'first', 'lead'] as const) {
         const ofType = tasks.filter((task) => task.type === type);
@@ -129,7 +138,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
         for (const task of ofType) {
           const lead = task.lead;
           lines.push(
-            `- ${linkOf(lead)} · ${lead.company.name} · ${task.reason}${task.followUpNumber ? ` · Follow-up ${task.followUpNumber}` : ''} · Besitzer ${defaultFounderName(lead.owner)} (lead_id: ${lead.id})`,
+            `- ${linkOf(lead)} · ${lead.company.name} · ${task.reason}${task.followUpNumber ? ` · Follow-up ${task.followUpNumber}` : ''} · Besitzer ${nameOf(lead.owner)} (lead_id: ${lead.id})`,
           );
         }
       }
@@ -238,14 +247,18 @@ export function createMcpServer(ctx: McpContext): McpServer {
       inputSchema: {
         outcome: z.enum(['all', 'replied', 'no_reply', 'interested', 'not_interested', 'meeting', 'lost']).optional(),
         category: categoryField,
-        owner: z.enum(AUTH_FOUNDER_IDS).optional(),
+        owner: z.string().trim().min(1).max(80).optional().describe(`Sender: Name oder ID – ${senders}`),
         fields: fieldsFilter,
         offset: z.number().int().min(0).optional(),
         limit: z.number().int().min(1).max(CONVERSATIONS_MAX_LIMIT).optional(),
       },
       annotations: READ,
     },
-    async (input) => ok(links(data.conversations(scope, input).text)),
+    async ({ owner, ...input }) => {
+      const resolved = owner ? resolveOwner(owner) : null;
+      if (owner && !resolved) return fail(`Unbekannter Sender „${owner}“ – bekannt: ${senders}.`);
+      return ok(links(data.conversations(scope, { ...input, owner: resolved }).text));
+    },
   );
 
   server.registerTool(
@@ -322,7 +335,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
         `Arbeitszeit: ${status.workHours.fromHour}–${status.workHours.toHour} Uhr (${status.withinWorkHours ? 'gerade innerhalb' : 'gerade außerhalb – Vernetzungsanfragen gehen erst wieder in der Arbeitszeit raus, Nachrichten jederzeit'})`,
         ...status.accounts.map(
           (account) =>
-            `- ${defaultFounderName(account.founder)}: ${account.connected ? 'verbunden' : 'kein Account'} · Anfragen heute ${account.invitesToday.used}/${account.invitesToday.limit} · Nachrichten heute ${account.messagesToday.used}/${account.messagesToday.limit}${account.pausedUntil ? ` · pausiert: ${account.pauseReason ?? ''}` : ''}`,
+            `- ${nameOf(account.founder)}: ${account.connected ? 'verbunden' : 'kein Account'} · Anfragen heute ${account.invitesToday.used}/${account.invitesToday.limit} · Nachrichten heute ${account.messagesToday.used}/${account.messagesToday.limit}${account.pausedUntil ? ` · pausiert: ${account.pauseReason ?? ''}` : ''}`,
         ),
       ];
       return ok(lines.join('\n'));
@@ -477,11 +490,13 @@ export function createMcpServer(ctx: McpContext): McpServer {
         stage: z.enum(LEAD_STAGES).optional(),
         next_step: z.string().trim().max(300).nullable().optional(),
         deal_value: z.number().int().min(0).nullable().optional(),
-        owner: z.enum(AUTH_FOUNDER_IDS).optional(),
+        owner: z.string().trim().min(1).max(80).optional().describe(`Neuer Sender: Name oder ID – ${senders}`),
       },
       annotations: WRITE,
     },
-    async ({ lead_id, stage, next_step, deal_value, owner }) => {
+    async ({ lead_id, stage, next_step, deal_value, owner: ownerInput }) => {
+      const owner = ownerInput ? resolveOwner(ownerInput) : null;
+      if (ownerInput && !owner) return fail(`Unbekannter Sender „${ownerInput}“ – bekannt: ${senders}.`);
       const patch = {
         ...(stage ? { stage } : {}),
         ...(next_step !== undefined ? { nextStep: next_step } : {}),
@@ -495,10 +510,10 @@ export function createMcpServer(ctx: McpContext): McpServer {
   );
 
   // ── Einstellungen (31.10.) ──────────────────────────────────────────────
-  registerSettingsTools(server, call);
+  registerSettingsTools(server, call, nameOf);
   registerSystemTools(server, call);
   registerTemplateTools(server, call);
-  registerImportTools(server, call, (id, label) => `[${label}](${baseUrl}/?${MCP_LEAD_PARAM}=${encodeURIComponent(id)}) (lead_id: ${id})`);
+  registerImportTools(server, call, resolveOwner, senders, (id, label) => `[${label}](${baseUrl}/?${MCP_LEAD_PARAM}=${encodeURIComponent(id)}) (lead_id: ${id})`);
   registerFeedbackTools(server, call, async (url) => {
     const response = await app.inject({ method: 'GET', url, headers: internalAuthHeaders(user.username) });
     return { status: response.statusCode, body: response.rawPayload, type: String(response.headers['content-type'] ?? 'application/octet-stream') };

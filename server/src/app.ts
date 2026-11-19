@@ -349,7 +349,7 @@ export function buildApp({
   });
   app.addHook('onClose', async () => conversation.close());
   // KI-Assistent (Vertrag shared/assistant.ts): Chat mit Lesezugriff auf alle Outreach-Daten.
-  registerAssistantRoutes(app, { config, db, leads, anthropicBaseURL: messagesTest?.anthropicBaseURL });
+  registerAssistantRoutes(app, { config, db, leads, anthropicBaseURL: messagesTest?.anthropicBaseURL, founderName });
   // MCP-Server für die Claude-App (Vertrag shared/mcp.ts): lesen und bedienen, mit OAuth.
   registerMcpRoutes(app, { config, db, leads, accounts: auth.accounts });
   // Übergabe heißer Leads an Close (Vertrag shared/crm.ts).
