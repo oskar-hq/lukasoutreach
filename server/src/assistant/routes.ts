@@ -36,10 +36,10 @@ function scopeOf(user: AuthUser | null): AuthFounderId[] | null {
 
 export function registerAssistantRoutes(
   app: FastifyInstance,
-  { config, db, leads, anthropicBaseURL }: { config: Config; db: Database; leads: LeadStore; anthropicBaseURL?: string },
+  { config, db, leads, anthropicBaseURL, founderName }: { config: Config; db: Database; leads: LeadStore; anthropicBaseURL?: string; founderName?: (id: AuthFounderId) => string },
 ) {
   const store = new AssistantStore(db);
-  const service = new AssistantService({ config, data: new AssistantData(leads, db), store, anthropicBaseURL });
+  const service = new AssistantService({ config, data: new AssistantData(leads, db, founderName), store, anthropicBaseURL });
   const models = new AnthropicModels({ baseURL: anthropicBaseURL });
   const userOf = (request: { authUser?: AuthUser | null }) => request.authUser ?? null;
   // Ohne Anmeldung (Übergang/Tests) ein gemeinsames Postfach.
