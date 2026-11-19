@@ -115,6 +115,7 @@ export function valueOf(key: SettingKey, config: Config, env: Env): SettingValue
     case 'AUTO_QUALIFY_TERMS': return config.autoQualifyTerms.length ? config.autoQualifyTerms.join(', ') : 'off';
     case 'LEAD_DISTRIBUTION': return config.leadDistribution;
     case 'QUALIFY_MIN_CONFIDENCE': return config.minConfidence;
+    case 'ONE_LEAD_PER_COMPANY': return config.onePerCompany ? 'on' : 'off';
     case 'UNIPILE_DSN': return config.unipile.dsn;
     case 'UNIPILE_ACCOUNT_ID': return config.unipile.accountId;
     case 'UNIPILE_SEARCH_API': return config.unipile.searchApi;

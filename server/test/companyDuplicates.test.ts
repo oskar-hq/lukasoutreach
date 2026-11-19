@@ -55,3 +55,15 @@ test('Lauf: Kontakt einer Firma, die schon im Cockpit steht (auch verloren), fli
   assert.match(henrik.note ?? '', /^Gleiche Firma schon im Cockpit · Andrea Anders · Johannes/);
   await app.close();
 });
+
+test('Lauf mit ONE_LEAD_PER_COMPANY=off (Lukas-Instanz 19.11.): weitere Person derselben Firma bleibt drin', async () => {
+  const app = mockApp(undefined, { ONE_LEAD_PER_COMPANY: 'off' });
+  const created = await app.inject({ method: 'POST', url: '/api/leads', payload: { cards: [card({})], owner: 'johannes' } });
+  assert.equal(created.statusCode, 200, created.body);
+  const response = await app.inject({ method: 'POST', url: '/api/lead-search/runs', payload: startBody() });
+  const run = await waitForEnd(app, (response.json() as { run: RunSnapshot }).run.id);
+  const henrik = run.leads.find((entry) => entry.hit.lastName === 'Vossberg')!;
+  assert.doesNotMatch(henrik.note ?? '', /Gleiche Firma/);
+  assert.notEqual(henrik.status, 'duplicate');
+  await app.close();
+});

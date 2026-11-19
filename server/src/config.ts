@@ -65,6 +65,8 @@ export interface Config {
   };
   /** Unter dieser Sicherheit gilt ein Lead nie als qualifiziert („streng ausgelegt“). */
   minConfidence: number;
+  /** Firmen-Dubletten in der Lead-Suche (`ONE_LEAD_PER_COMPANY` on/off, Standard on). */
+  onePerCompany: boolean;
   /** Tagesstapel (Vertrag `shared/tasks.ts`). */
   tasks: {
     followUpAfterDays: number;
@@ -350,6 +352,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       graphVersion: normalizeGraphVersion(text(env.META_GRAPH_VERSION) ?? DEFAULT_META_GRAPH_VERSION),
     },
     minConfidence: Math.min(1, Math.max(0, number(env.QUALIFY_MIN_CONFIDENCE, 0.6))),
+    onePerCompany: (text(env.ONE_LEAD_PER_COMPANY) ?? 'on').toLowerCase() !== 'off',
     tasks: {
       followUpAfterDays: Math.max(1, Math.floor(number(env.FOLLOWUP_AFTER_DAYS, 2))),
       maxFollowUps: Math.max(0, Math.floor(number(env.MAX_FOLLOW_UPS, 3))),

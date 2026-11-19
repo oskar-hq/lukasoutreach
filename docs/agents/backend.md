@@ -3,6 +3,8 @@
 > Nur der Backend-Agent schreibt hier. Kurz halten, bei jedem Push aktualisieren, Erledigtes nach einer Woche löschen.
 
 ## Woran ich arbeite
+- **`claude/exciting-planck-euf6bn` (19.11., Lukas Punkt 2)** – Einstellung `ONE_LEAD_PER_COMPANY` (on/off, Standard on,
+  Lead-Suche): aus = Firmen-Dubletten im Runner abgeschaltet (`onePerCompany`). Test `companyDuplicates.test.ts`.
 - **`claude/exciting-planck-euf6bn` (19.11., Lukas: „Cockpit als Sendemaschine“, Punkt 1 seiner Liste)** – Listen-Import:
   `leads/importQueue.ts` (Warteschlange `lead_imports`, 3–8 s Pause, Profil-Tageslimit des Accounts über `AccountUsage`,
   Quelle `import_profile`, Ruhe 1 h bei Zugangsfehlern), `leads/importRoutes.ts` (`POST /api/leads/add`, `POST
