@@ -144,6 +144,7 @@ export const SETTING_KEYS = [
   'MAX_RESULTS',
   'SEARCH_HITS_PER_RUN',
   'QUALIFY_MIN_CONFIDENCE',
+  'ONE_LEAD_PER_COMPANY',
   'AUTO_QUALIFY_TERMS',
   'LEAD_DISTRIBUTION',
   'UNIPILE_DSN',
@@ -288,6 +289,18 @@ export const SETTINGS: readonly SettingDefinition[] = [
     type: 'integer',
     min: 20,
     max: 1000,
+  },
+  {
+    // Lukas-Instanz 19.11.: 3–6 Personen je Firma ansprechen – die Firmen-Dubletten der Lead-Suche abschaltbar.
+    key: 'ONE_LEAD_PER_COMPANY',
+    group: 'leadSearch',
+    label: 'Eine Person je Firma',
+    help: 'An: Die Lead-Suche sortiert weitere Personen einer Firma aus, die schon im Cockpit oder im selben Lauf ist. Aus: mehrere Personen je Firma – nur dieselbe Person nie doppelt. Der Listen-Import kennt diese Regel nicht.',
+    type: 'choice',
+    options: [
+      { value: 'on', label: 'An' },
+      { value: 'off', label: 'Aus' },
+    ],
   },
   { key: 'QUALIFY_MIN_CONFIDENCE', group: 'leadSearch', label: 'Mindestsicherheit der KI', help: 'Unter diesem Wert (0 bis 1) gilt ein Lead nie als qualifiziert.', type: 'number', min: 0, max: 1 },
   {

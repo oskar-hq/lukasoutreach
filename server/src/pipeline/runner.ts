@@ -137,6 +137,8 @@ export class PipelineRunner {
     private readonly store: RunStore,
     private readonly options: {
       minConfidence: number | (() => number);
+      /** Firmen-Dubletten (27.10.) – aus: mehrere Personen je Firma (Lukas-Instanz 19.11.). Standard an. */
+      onePerCompany?: () => boolean;
       /**
        * Suchtreffer pro Lauf (`SEARCH_HITS_PER_RUN`). Ohne Angabe wie früher `searchTarget(maxResults)`; nie weniger
        * als das, damit kleine Werte die Anreicherung nicht aushungern.
@@ -458,12 +460,13 @@ export class PipelineRunner {
       }
       const known = new Map(request.known.map((entry) => [entry.providerId, entry.owner]));
       // Firmen-Dubletten (27.10.): Firmen im Cockpit und in diesem Lauf schon qualifizierte Firmen – je Firma ein Lead.
-      const cockpitCompanies = leads?.companyIndex ? safely(() => leads.companyIndex!(), new Map<string, CompanyLead>(), log, run.id) : new Map<string, CompanyLead>();
+      const onePerCompany = this.options.onePerCompany?.() ?? true;
+      const cockpitCompanies = !onePerCompany ? new Map<string, CompanyLead>() : leads?.companyIndex ? safely(() => leads.companyIndex!(), new Map<string, CompanyLead>(), log, run.id) : new Map<string, CompanyLead>();
       const runCompanies = new Map<string, { id: string; name: string }>();
       const companyOf = (profile: EnrichedProfile) => companyKeys({ name: profile.companyName, website: profile.companyWebsite });
       const sameCompanyInCockpit = (profile: EnrichedProfile) => companyOf(profile).map((key) => cockpitCompanies.get(key)).find(Boolean) ?? null;
       const sameCompanyInRun = (profile: EnrichedProfile, self: string) =>
-        companyOf(profile)
+        !onePerCompany ? null : companyOf(profile)
           .map((key) => runCompanies.get(key))
           .find((entry) => entry !== undefined && entry.id !== self)?.name ?? null;
       const checked = skip;
@@ -643,7 +646,7 @@ export class PipelineRunner {
             founderName,
           );
           const companyLead = sameCompanyInCockpit(result.profile);
-          const companyDeleted = !companyLead && !!leads?.companyWasDeleted?.({ name: result.profile.companyName, website: result.profile.companyWebsite });
+          const companyDeleted = onePerCompany && !companyLead && !!leads?.companyWasDeleted?.({ name: result.profile.companyName, website: result.profile.companyWebsite });
           const companyInRun = sameCompanyInRun(result.profile, lead.id);
           if (existingLate) {
             update(lead, { status: 'duplicate', note: cockpitNote(existingLate, ' (im Profil erkannt)'), profile: result.profile });

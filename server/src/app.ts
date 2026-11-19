@@ -370,6 +370,7 @@ export function buildApp({
   app.addHook('onReady', () => tracking.load());
   const runner = new PipelineRunner(adapter, store, {
     minConfidence: () => config.minConfidence,
+    onePerCompany: () => config.onePerCompany,
     searchHits: () => config.searchHits,
     log: app.log,
     tracking,
