@@ -800,6 +800,56 @@ export class LinkedInService {
   }
 
   /**
+   * Personen bei einer Firma suchen (Lukas-Instanz 19.11., „Marketing-Leute bei Firma X“): eine klassische
+   * Personensuche über den Account des Besitzers mit `advanced_keywords` (aktuelle Firma + Position) – derselbe
+   * dokumentierte Suchparameter wie in der Lead-Suche (`buildClassicSearchBody` mit `company`). Liest nur, sendet nichts.
+   * Ohne Profilabruf: Name, Headline, aktuelle Firma aus dem Suchtreffer. Simulation: drei erfundene Treffer je Firma.
+   */
+  async searchPeopleAtCompany(
+    owner: AuthFounderId,
+    company: string,
+    title: string,
+    limit: number,
+  ): Promise<Array<{ profile: string; name: string; headline: string; company: string | null; connected: boolean }>> {
+    if (this.deps.config.mode === 'mock') {
+      const slug = company.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'firma';
+      return Array.from({ length: Math.min(3, limit) }, (_unused, index) => ({
+        profile: `https://www.linkedin.com/in/${slug}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${index + 1}`,
+        name: `Person ${index + 1} ${company}`,
+        headline: `${title} bei ${company}`,
+        company,
+        connected: false,
+      }));
+    }
+    const accountId = this.settings.accounts[owner];
+    if (!accountId) throw new LinkedInError('linkedin_no_account', 409, noAccountMessage(this.founderName(owner)));
+    this.assertEnabled(accountId, owner);
+    const client = this.testClient();
+    try {
+      const response = await client.search(
+        {
+          accountId,
+          limit,
+          body: { api: 'classic', category: 'people', advanced_keywords: { title, company }, network_distance: [1, 2, 3] },
+        },
+        AbortSignal.timeout(30_000),
+      );
+      return (response.items ?? [])
+        .filter((item) => item.public_identifier || item.public_profile_url || item.profile_url)
+        .map((item) => ({
+          profile: item.public_identifier ? `https://www.linkedin.com/in/${encodeURIComponent(item.public_identifier)}` : (item.public_profile_url ?? item.profile_url)!,
+          name: item.name?.trim() || [item.first_name, item.last_name].filter(Boolean).join(' '),
+          headline: item.headline?.trim() ?? '',
+          company: item.current_positions?.[0]?.company?.trim() || null,
+          connected: item.network_distance === 'DISTANCE_1',
+        }));
+    } catch (error) {
+      const classified = classify(error);
+      throw new LinkedInError(classified.code === 'linkedin_paused' ? 'linkedin_error' : classified.code, classified.status, classified.reason.replace(/ – nichts gesendet\.?$/, '.'));
+    }
+  }
+
+  /**
    * Bestehende Unterhaltung mit einem eben aufgenommenen Kontakt übernehmen (Wunsch des Nutzers 19.10.): die neueste
    * 1:1-Unterhaltung über den Account des Besitzers, bis zu 100 Nachrichten. Nur lesend. Schlägt das fehl, bleibt der
    * Lead, wie er ist (der Kontakt ist schon angelegt) – Rückgabe dann `null`. Simulation: zwei erfundene Nachrichten.

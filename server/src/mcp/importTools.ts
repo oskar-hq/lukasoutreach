@@ -6,6 +6,9 @@ import {
   LEAD_FIELD_KEY_PATTERN,
   LEAD_FIELD_VALUE_MAX_LENGTH,
   LEAD_IMPORT_MAX_ITEMS,
+  COMPANY_SEARCH_MAX_COMPANIES,
+  COMPANY_SEARCH_MAX_RESULTS,
+  type LeadCompanySearchResponse,
   type LeadAddResponse,
   type LeadImportResponse,
   type LeadImportStatusResponse,
@@ -138,6 +141,43 @@ export function registerImportTools(
         ),
       ];
       return ok(lines.filter((line, index) => line !== '' || index === 3).join('\n'));
+    },
+  );
+
+  server.registerTool(
+    'search_company_people',
+    {
+      title: 'Personen bei Firmen suchen',
+      description: `Je Firma eine LinkedIn-Personensuche nach aktueller Firma und Position (Standard „Marketing“), bis ${COMPANY_SEARCH_MAX_COMPANIES} Firmen je Aufruf, bis ${COMPANY_SEARCH_MAX_RESULTS} Treffer je Firma. Keine KI, keine Qualifizierung. Ohne import nur die Liste zum Ansehen (Name, Headline, aktuelle Firma) – prüf sie mit dem Nutzer; mit import: true gehen die Treffer in die Import-Warteschlange (Feld firma_suche = gesuchte Firma). Zählt zum Tageslimit für Suchtreffer des Accounts.`,
+      inputSchema: {
+        companies: z.array(z.string().trim().min(2).max(200)).min(1).max(COMPANY_SEARCH_MAX_COMPANIES),
+        title: z.string().trim().min(2).max(100).optional().describe('Positions-Stichwort, z. B. „Marketing“, „Head of Growth“'),
+        limit: z.number().int().min(1).max(COMPANY_SEARCH_MAX_RESULTS).optional().describe('Treffer je Firma (Standard 10)'),
+        owner: itemShape.owner,
+        import: z.boolean().optional(),
+        category: itemShape.category,
+        fields: fieldsSchema.optional(),
+      },
+      annotations: WRITE,
+    },
+    async (input) => {
+      let owner: AuthFounderId | undefined;
+      try {
+        owner = ownerOf(input.owner);
+      } catch (error) {
+        return fail((error as Error).message);
+      }
+      const result = await call<LeadCompanySearchResponse>('POST', '/api/leads/company-search', { ...input, owner });
+      if (!result.ok) return fail(result.message);
+      const label = { queued: 'Warteschlange', duplicate: 'Dublette', invalid: 'Fehler' } as const;
+      const lines = [`# Personen bei Firmen`, result.body.message];
+      for (const entry of result.body.companies) {
+        lines.push('', `## ${entry.company}${entry.message ? ` – ${entry.message}` : ''}`);
+        for (const person of entry.people) {
+          lines.push(`- ${person.name} · ${person.headline || '–'} · ${person.company ?? 'Firma unbekannt'} · ${person.profile}${person.result ? ` · ${label[person.result]}` : ''}`);
+        }
+      }
+      return ok(lines.join('\n'));
     },
   );
 

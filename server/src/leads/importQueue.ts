@@ -8,10 +8,12 @@ import {
   type LeadImportItem,
   type LeadImportItemResult,
   type LeadImportStatusResponse,
+  type LeadCompanySearchRequest,
+  type LeadCompanySearchResponse,
 } from '../../../shared/leadImport.js';
 import type { Database } from '../db/database.js';
 import type { AccountUsage } from '../linkedin/accountUsage.js';
-import { UNIPILE_LIMITS } from '../linkedin/accountUsage.js';
+import { FOUNDER_SCRAPE_LIMITS, UNIPILE_LIMITS } from '../linkedin/accountUsage.js';
 import type { AccountPrefsStore } from '../linkedin/accountPrefs.js';
 import type { ConnectionStore } from '../linkedin/connections.js';
 import { LinkedInError, type LinkedInService } from '../linkedin/service.js';
@@ -258,6 +260,71 @@ export class LeadImportQueue {
     return { status: 'created', lead: current, message: `${name(current)} ist jetzt unter „${LEAD_STAGE_LABELS[current.stage]}“.` };
   }
 
+  // ── Personen bei Firmen suchen ─────────────────────────────────────────
+
+  /** Freie Suchtreffer heute für den Account des Besitzers (Gründer-Accounts: halbes Limit, wie beim Scrapen). */
+  searchRoom(owner: AuthFounderId, now = Date.now()): { used: number; limit: number; free: number } {
+    const accountId = this.deps.linkedin.accountOf(owner);
+    if (!accountId) return { used: 0, limit: 0, free: 0 };
+    const own = this.deps.prefs?.get(accountId).searchResultsPerDay ?? null;
+    const limit = Math.min(FOUNDER_SCRAPE_LIMITS.searchResultsPerDay.classic, own ?? FOUNDER_SCRAPE_LIMITS.searchResultsPerDay.classic);
+    const used = this.deps.usage.used(accountId, 'search', now);
+    return { used, limit, free: Math.max(0, limit - used) };
+  }
+
+  /** Je Firma eine Suche (Pause dazwischen); mit `import` gehen die Treffer in die Warteschlange. */
+  async searchCompanies(request: LeadCompanySearchRequest & { owner: AuthFounderId }, actor: string | null): Promise<LeadCompanySearchResponse> {
+    const title = request.title?.trim() || 'Marketing';
+    const limit = request.limit ?? 10;
+    const accountId = this.deps.linkedin.accountOf(request.owner);
+    const companies: LeadCompanySearchResponse['companies'] = [];
+    let queued = 0;
+    let stopped: string | null = null;
+    for (const [index, raw] of request.companies.entries()) {
+      const company = raw.trim();
+      if (stopped) {
+        companies.push({ company, status: 'skipped', message: stopped, people: [] });
+        continue;
+      }
+      const room = this.searchRoom(request.owner);
+      if (room.free < limit) {
+        stopped = `Tageslimit für Suchtreffer erreicht (${room.used}/${room.limit}) – morgen weiter.`;
+        companies.push({ company, status: 'skipped', message: stopped, people: [] });
+        continue;
+      }
+      if (index > 0) await sleep(this.pauseMs());
+      try {
+        const found = await this.deps.linkedin.searchPeopleAtCompany(request.owner, company, title, limit);
+        // Gezählt wird die angefragte Seite (wie in der Lead-Suche), auch wenn weniger kommen.
+        if (accountId) this.deps.usage.add(accountId, 'search', limit, Date.now(), 'search');
+        const people = found.map((person) => ({ profile: person.profile, name: person.name, headline: person.headline, company: person.company }));
+        if (request.import && people.length) {
+          const results = this.enqueue(
+            people.map((person) => ({
+              profile: person.profile,
+              identifier: profileIdentifierOf(person.profile),
+              owner: request.owner,
+              ...(request.category ? { category: request.category } : {}),
+              fields: { ...(request.fields ?? {}), firma_suche: company },
+            })),
+            request.owner,
+            actor,
+          );
+          people.forEach((person, position) => Object.assign(person, { result: results[position]?.status }));
+          queued += results.filter((result) => result.status === 'queued').length;
+        }
+        companies.push({ company, status: 'ok', message: people.length ? null : 'Keine Treffer.', people });
+      } catch (error) {
+        const message = error instanceof LinkedInError ? error.message : 'Suche fehlgeschlagen.';
+        if (!(error instanceof LinkedInError) || error.code !== 'linkedin_rejected') stopped = message;
+        companies.push({ company, status: 'error', message, people: [] });
+      }
+    }
+    const found = companies.reduce((sum, entry) => sum + entry.people.length, 0);
+    const message = `${found} Treffer bei ${companies.filter((entry) => entry.status === 'ok').length} von ${companies.length} Firmen${request.import ? `, ${queued} in die Warteschlange` : ''}.${stopped ? ` ${stopped}` : ''}`;
+    return { companies, queued, message };
+  }
+
   // ── Stand ──────────────────────────────────────────────────────────────
 
   /** Freie Profilabrufe heute für den Account des Besitzers (alle Zwecke zusammen). */
@@ -319,6 +386,17 @@ export class LeadImportQueue {
     const min = this.deps.minPauseMs ?? 3000;
     const max = this.deps.minPauseMs !== undefined ? this.deps.minPauseMs : 8000;
     return min + Math.random() * (max - min);
+  }
+}
+
+/** Kennung aus einem Profil-Link (wie `profileIdentifier` der LinkedIn-Routen, ohne deren Import-Kreis). */
+function profileIdentifierOf(url: string): string | null {
+  const match = /linkedin\.com\/in\/([^/?#\s]+)/i.exec(url);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]).toLowerCase();
+  } catch {
+    return null;
   }
 }
 
