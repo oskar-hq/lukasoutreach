@@ -12,6 +12,8 @@ import { TASK_TYPES, type AttentionItem, type DailyTask, type TaskType, type Tas
 export interface TaskRules {
   followUpAfterDays: number;
   maxFollowUps: number;
+  /** Tage nach der Erstnachricht je Follow-up (z. B. [6, 13]); leer/fehlt = alle `followUpAfterDays` Tage. */
+  followUpScheduleDays?: number[];
   newLeadsPerDay: number;
   inviteStaleDays: number;
   /** Notiz zur Vernetzungsanfrage anbieten (`INVITE_NOTE`). */
@@ -119,6 +121,14 @@ export function computeTasks(
   const paused = (lead: CockpitLead) => (!!lead.snoozedUntil && lead.snoozedUntil > now) || (!!lead.followUpPlan && lead.followUpPlan.at > now);
   const leads = (owner ? allLeads.filter((lead) => lead.owner === owner) : allLeads).filter((lead) => !paused(lead));
   const followUpMs = rules.followUpAfterDays * DAY;
+  // Zeitplan (19.11.): Abstand vor Follow-up n = Tag n − Tag n−1, gerechnet ab der letzten eigenen Nachricht.
+  const schedule = rules.followUpScheduleDays ?? [];
+  const gapBefore = (number: number): number => {
+    if (!schedule.length) return followUpMs;
+    const index = Math.min(number, schedule.length) - 1;
+    return (schedule[index] - (index > 0 ? schedule[index - 1] : 0)) * DAY;
+  };
+  const maxFollowUps = schedule.length || rules.maxFollowUps;
   const byType: Record<TaskType, DailyTask[]> = { reply: [], followup: [], first: [], lead: [] };
   const attention: AttentionItem[] = [];
   const newLeads = new Map<AuthFounderId, CockpitLead[]>();
@@ -179,12 +189,13 @@ export function computeTasks(
         }
         const last = lead.lastContactAt ?? lead.lastActivityAt;
         const silent = daysSince(last, now);
-        if (now - last < followUpMs) break;
-        if (lead.followUpsSent >= rules.maxFollowUps) {
+        const wait = gapBefore(lead.followUpsSent + 1);
+        if (now - last < wait) break;
+        if (lead.followUpsSent >= maxFollowUps) {
           attention.push({
             lead,
             reason: 'followups_done',
-            detail: `Alle ${rules.maxFollowUps} Follow-ups gesendet, keine Antwort ${dayText(silent)}`,
+            detail: `Alle ${maxFollowUps} Follow-ups gesendet, keine Antwort ${dayText(silent)}`,
             days: silent,
           });
           break;
@@ -194,8 +205,8 @@ export function computeTasks(
           id: `${lead.id}:followup:${number}`,
           type: 'followup',
           lead,
-          dueSince: last + followUpMs,
-          reason: `Keine Antwort ${dayText(silent)} – Follow-up ${number} von ${rules.maxFollowUps}`,
+          dueSince: last + wait,
+          reason: `Keine Antwort ${dayText(silent)} – Follow-up ${number} von ${maxFollowUps}`,
           followUpNumber: number,
         });
         break;

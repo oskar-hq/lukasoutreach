@@ -74,7 +74,15 @@ export interface Config {
   /** Tagesstapel (Vertrag `shared/tasks.ts`). */
   tasks: {
     followUpAfterDays: number;
+    /** Wirksame Höchstzahl: mit Zeitplan dessen Länge, sonst `MAX_FOLLOW_UPS`. */
     maxFollowUps: number;
+    /** `MAX_FOLLOW_UPS` wie eingestellt (für die Einstellungen). */
+    maxFollowUpsSetting: number;
+    /**
+     * Follow-up-Zeitplan (`FOLLOWUP_SCHEDULE_DAYS`, Lukas-Instanz 19.11.): Tage nach der Erstnachricht je Follow-up,
+     * z. B. [6, 13] = Follow-up 1 an Tag 6, Follow-up 2 an Tag 13. Leer = alle `followUpAfterDays` Tage.
+     */
+    followUpScheduleDays: number[];
     newLeadsPerDay: number;
     inviteStaleDays: number;
     /** Notiz zur Vernetzungsanfrage anbieten (`INVITE_NOTE` on/off, Standard on). */
@@ -361,7 +369,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     leadFields: [...new Set((text(env.LEAD_FIELDS) ?? '').split(',').map((entry) => entry.trim().toLowerCase()).filter((entry) => /^[a-z][a-z0-9_]{0,39}$/.test(entry)))],
     tasks: {
       followUpAfterDays: Math.max(1, Math.floor(number(env.FOLLOWUP_AFTER_DAYS, 2))),
-      maxFollowUps: Math.max(0, Math.floor(number(env.MAX_FOLLOW_UPS, 3))),
+      maxFollowUps: followUpSchedule(env.FOLLOWUP_SCHEDULE_DAYS).length || Math.max(0, Math.floor(number(env.MAX_FOLLOW_UPS, 3))),
+      maxFollowUpsSetting: Math.max(0, Math.floor(number(env.MAX_FOLLOW_UPS, 3))),
+      followUpScheduleDays: followUpSchedule(env.FOLLOWUP_SCHEDULE_DAYS),
       newLeadsPerDay: Math.max(0, Math.floor(number(env.NEW_LEADS_PER_DAY, 20))),
       inviteStaleDays: Math.max(1, Math.floor(number(env.INVITE_STALE_DAYS, 14))),
       inviteNote: (text(env.INVITE_NOTE) ?? 'on').toLowerCase() !== 'off',
@@ -532,4 +542,12 @@ export function replaceConfig<T extends object>(target: T, source: T): void {
 /** Platzhalter aus freien Feldern (Lukas-Instanz 19.11.): `LEAD_FIELDS` plus immer `kategorie`. */
 export function fieldPlaceholders(config: Pick<Config, 'leadFields'>): string[] {
   return [...new Set([...config.leadFields, 'kategorie'])];
+}
+
+/** „6, 13“ → [6, 13]: ganze Tage 1–120, streng steigend, höchstens 3 (Follow-up 1–3). Sonst leer (= kein Zeitplan). */
+export function followUpSchedule(value: string | undefined): number[] {
+  const parts = (value ?? '').split(',').map((part) => part.trim()).filter(Boolean);
+  const days = parts.map((part) => Number(part));
+  const valid = days.length > 0 && days.length <= 3 && days.every((day, index) => Number.isInteger(day) && day >= 1 && day <= 120 && (index === 0 || day > days[index - 1]));
+  return valid ? days : [];
 }

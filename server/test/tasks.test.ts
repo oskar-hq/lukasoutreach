@@ -475,3 +475,23 @@ test('Leads aus einer Suche von Hand von gestern haben Vorrang vor automatisch g
   for (const entry of manual) assert.ok(picked.includes(entry.id), `${entry.id} fehlt trotz Suche von Hand`);
   assert.equal(picked.length, RULES.newLeadsPerDay);
 });
+
+test('Follow-up-Zeitplan [6, 13] (Lukas-Instanz 19.11.): Follow-up 1 an Tag 6, Follow-up 2 an Tag 13, dann Aufmerksamkeit', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const rules: TaskRules = { ...RULES, followUpScheduleDays: [6, 13] };
+  const contacted = (sentDaysAgo: number, followUpsSent: number) =>
+    lead('contacted', { id: `l-${sentDaysAgo}-${followUpsSent}`, followUpsSent, lastContactAt: NOW - sentDaysAgo * DAY_MS, lastActivityAt: NOW - sentDaysAgo * DAY_MS });
+  const due = (entry: CockpitLead) => computeTasks([entry], 'nick', rules, NOW);
+  // Erstnachricht vor 5 Tagen: noch nichts; vor 6 Tagen: Follow-up 1 von 2.
+  assert.equal(due(contacted(5, 0)).counts.followup, 0);
+  const first = due(contacted(6, 0));
+  assert.equal(first.tasks[0]?.followUpNumber, 1);
+  assert.match(first.tasks[0]?.reason ?? '', /Follow-up 1 von 2/);
+  // Follow-up 1 vor 6 Tagen gesendet (Tag 12): noch nicht; vor 7 Tagen (Tag 13): Follow-up 2.
+  assert.equal(due(contacted(6, 1)).counts.followup, 0);
+  assert.equal(due(contacted(7, 1)).tasks[0]?.followUpNumber, 2);
+  // Beide gesendet: kein drittes Follow-up, sondern „braucht Aufmerksamkeit“ (Höchstzahl = Länge des Zeitplans).
+  const done = due(contacted(30, 2));
+  assert.equal(done.counts.followup, 0);
+  assert.match(done.attention[0]?.detail ?? '', /Alle 2 Follow-ups gesendet/);
+});

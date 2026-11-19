@@ -149,7 +149,8 @@ export function valueOf(key: SettingKey, config: Config, env: Env): SettingValue
     case 'ENRICH_AUTO': return config.clay.autoEnrich;
     case 'ENRICH_MAX_PER_DAY': return config.clay.dailyLimit;
     case 'FOLLOWUP_AFTER_DAYS': return config.tasks.followUpAfterDays;
-    case 'MAX_FOLLOW_UPS': return config.tasks.maxFollowUps;
+    case 'MAX_FOLLOW_UPS': return config.tasks.maxFollowUpsSetting;
+    case 'FOLLOWUP_SCHEDULE_DAYS': return config.tasks.followUpScheduleDays.join(', ');
     case 'LEAD_FIELDS': return config.leadFields.join(', ');
     case 'LEAD_CATEGORY_LIST': return config.leadCategories.join(', ');
     case 'NEW_LEADS_PER_DAY': return config.tasks.newLeadsPerDay;

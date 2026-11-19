@@ -3,6 +3,10 @@
 > Nur der Backend-Agent schreibt hier. Kurz halten, bei jedem Push aktualisieren, Erledigtes nach einer Woche löschen.
 
 ## Woran ich arbeite
+- **`claude/exciting-planck-euf6bn` (19.11., Lukas Punkt 7)** – Einstellung `FOLLOWUP_SCHEDULE_DAYS` (z. B. „6, 13“): Follow-up n
+  an Tag n nach der Erstnachricht (Abstand ab letzter eigener Nachricht), Höchstzahl = Länge; `config.tasks.maxFollowUps`
+  ist jetzt die wirksame Zahl, `maxFollowUpsSetting` der eingestellte Wert. Vertrag: `TasksResponse.rules.followUpScheduleDays?`.
+  Test `tasks.test.ts`.
 - **`claude/exciting-planck-euf6bn` (19.11., Lukas Punkte 4+6)** – Einstellung `LEAD_CATEGORY_LIST` (eigene Kategorien,
   Feld `kategorie`, Import prüft dagegen). MCP `find_leads`/`read_conversations`: `category` frei (eigene oder KI),
   `fields`-Filter; `outreach_analysis`: `group_by` (freie Felder), `category`, `fields`. `categoryOf` nimmt `kategorie` vor

@@ -347,6 +347,10 @@ Karte zeigt „Für Johannes · über Johannes' LinkedIn“ – gesendet wird au
 | Variable | Standard | Bedeutung |
 | --- | --- | --- |
 | `FOLLOWUP_AFTER_DAYS` | `2` | Follow-up fällig nach so vielen Tagen ohne Antwort |
+| `FOLLOWUP_SCHEDULE_DAYS` | – | Follow-ups an festen Tagen nach der Erstnachricht, z. B. `6,13` (höchstens 3, steigend); gilt dann statt `FOLLOWUP_AFTER_DAYS` und `MAX_FOLLOW_UPS` |
+| `ONE_LEAD_PER_COMPANY` | `on` | `off` = Lead-Suche erlaubt mehrere Personen je Firma |
+| `LEAD_FIELDS` | – | Freie Felder der Leads als Platzhalter in Vorlagen (Komma-Liste) |
+| `LEAD_CATEGORY_LIST` | – | Eigene Kategorien (Komma-Liste) |
 | `MAX_FOLLOW_UPS` | `3` | höchstens so viele Follow-ups, danach „braucht Aufmerksamkeit“ |
 | `NEW_LEADS_PER_DAY` | `20` | Karten „Neuer Lead“ pro Gründer und Tag im Tagesstapel (LinkedIn-Tageslimit) – begrenzt nicht die automatische Suche |
 | `INVITE_NOTE` | `on` | Notiz zur Vernetzungsanfrage anbieten; `off` blendet sie aus, Anfragen gehen ohne Notiz (Einstellungen → Tagesstapel) |
