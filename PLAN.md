@@ -174,6 +174,7 @@ Meta-Werbebibliothek (wer gerade Anzeigen schaltet, geht seit 07.10. markiert mi
 | POST | `/api/leads/add` | Listen-Import, einzeln sofort (`LeadAddRequest`, `shared/leadImport.ts`): ein Profilabruf, keine KI/Meta, optional Kategorie, Notiz, freie Felder → 201 `LeadAddResponse` · 200 Dublette · 429 Tageslimit |
 | POST | `/api/leads/import` | Bis 100 Links einreihen (`LeadImportRequest`) → 202 `LeadImportResponse` (je Link queued/duplicate/invalid); Warteschlange hält das Profil-Tageslimit des Accounts ein |
 | GET | `/api/leads/import/status` | Stand der Warteschlange → `LeadImportStatusResponse` |
+| POST | `/api/leads/company-search` | Personen bei Firmen suchen (`LeadCompanySearchRequest`) → `LeadCompanySearchResponse`, optional direkt in die Import-Warteschlange |
 | PUT | `/api/leads/:id/fields` | Freie Felder setzen (`{ fields }`, leerer Wert löscht) → `LeadDetailResponse` |
 | GET | `/api/settings/prompts` | Eigene KI-Prompts je Instanz (Standard oder eigener Text) |
 | PUT | `/api/settings/prompts/:key` | `{ text \| null }` – eigener Prompt bzw. Standard (qualify, prescreen, writer, conversation, assistant) |

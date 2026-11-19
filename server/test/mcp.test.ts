@@ -377,7 +377,7 @@ test('Claude-App: Leads aus einer Liste – add_lead, import_leads, import_statu
   const client = await mcpClient(app, tokens.access_token);
   try {
     const tools = (await client.listTools()).tools.map((tool) => tool.name);
-    for (const name of ['add_lead', 'import_leads', 'import_status', 'set_lead_fields']) assert.ok(tools.includes(name), name);
+    for (const name of ['add_lead', 'import_leads', 'import_status', 'set_lead_fields', 'search_company_people']) assert.ok(tools.includes(name), name);
 
     const added = textOf(await client.callTool({ name: 'add_lead', arguments: { profile: 'https://www.linkedin.com/in/mcp-gruenderin', category: 'startup_gruender', fields: { welle: '1' } } }));
     assert.match(added, /^Angelegt: /);

@@ -7,6 +7,8 @@ import {
   LEAD_FIELD_VALUE_MAX_LENGTH,
   LEAD_FIELDS_MAX,
   LEAD_IMPORT_MAX_ITEMS,
+  COMPANY_SEARCH_MAX_COMPANIES,
+  COMPANY_SEARCH_MAX_RESULTS,
   type LeadAddResponse,
   type LeadImportResponse,
 } from '../../../shared/leadImport.js';
@@ -37,6 +39,18 @@ const ImportSchema = z.object({ items: z.array(ItemSchema).min(1, 'Mindestens ei
 const StatusQuery = z.object({ owner: founderField.optional(), limit: z.coerce.number().int().min(1).max(200).optional() });
 const IdParams = z.object({ id: z.string().min(1).max(64) });
 const FieldsBody = z.object({ fields: FieldsSchema });
+const CompanySearchSchema = z.object({
+  companies: z
+    .array(z.string().trim().min(2, 'Firmenname zu kurz.').max(200))
+    .min(1, 'Mindestens eine Firma.')
+    .max(COMPANY_SEARCH_MAX_COMPANIES, `Höchstens ${COMPANY_SEARCH_MAX_COMPANIES} Firmen je Aufruf.`),
+  title: z.string().trim().min(2).max(100).optional(),
+  limit: z.number().int().min(1).max(COMPANY_SEARCH_MAX_RESULTS).optional(),
+  owner: founderField.optional(),
+  import: z.boolean().optional(),
+  category: z.string().trim().max(80).optional(),
+  fields: FieldsSchema.optional(),
+});
 
 function sendError(reply: FastifyReply, status: number, code: string, message: string, retryAfter?: number) {
   if (retryAfter) reply.header('Retry-After', String(retryAfter));
@@ -134,6 +148,19 @@ export function registerLeadImportRoutes(
     const visible = AUTH_FOUNDER_IDS.filter((id) => !assistantDenial(user, id, founderName));
     const owners = parsed.data.owner ? visible.filter((id) => id === parsed.data.owner) : visible;
     return queue.status(owners, parsed.data.limit ?? 20);
+  });
+
+  app.post('/api/leads/company-search', async (request, reply) => {
+    const parsed = CompanySearchSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return sendError(reply, 400, 'invalid_request', issues(parsed.error));
+    const user = request.authUser ?? null;
+    const owner = parsed.data.owner ?? actingFounder(user);
+    if (!owner) return sendError(reply, 400, 'invalid_request', 'Bitte angeben, über wessen Account gesucht wird (owner).');
+    const denial = assistantDenial(user, owner, founderName);
+    if (denial) return sendError(reply, 403, 'not_allowed', denial);
+    const badCategory = categoryProblem(parsed.data.category);
+    if (badCategory) return sendError(reply, 400, 'invalid_request', badCategory);
+    return queue.searchCompanies({ ...parsed.data, owner }, actorFor(user, owner));
   });
 
   /** Freie Felder eines vorhandenen Leads setzen (leerer Wert löscht das Feld). */

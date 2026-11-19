@@ -509,6 +509,10 @@ Deal Value ändern (`shared/mcp.ts`, Code `server/src/mcp/`).
 - **Eigene KI-Prompts (19.11.):** `list_prompts` zeigt die Prompts für Einstufung, Vorprüfung, Texter,
   Gesprächseinschätzung und KI-Assistent; `set_prompt` ersetzt einen (Zielgruppe, Kriterien, Ton) – die technischen
   Ausgabe-Regeln hängt das Cockpit selbst an. `text: null` stellt den Standard wieder her. Nur Gründer und Admin.
+- **Personen bei Firmen (19.11.):** `search_company_people` sucht je Firma Personen mit Positions-Stichwort (Standard
+  „Marketing“) über den eigenen LinkedIn-Account – ohne KI und ohne Finanz-Qualifizierung. Ohne `import` nur die Liste,
+  mit `import: true` direkt in die Import-Warteschlange (Feld `firma_suche`). Bis 20 Firmen je Aufruf, zählt zum
+  Tageslimit für Suchtreffer (Gründer-Account: 500 am Tag).
 - **Trennen:** im selben Dialog („Trennen“) – das Token ist sofort ungültig. Zugriffstokens gelten 8 h, Claude erneuert
   sie selbst (bis 90 Tage ohne Nutzung).
 - **Voraussetzung:** öffentlich per https erreichbar (Caddy) und `PUBLIC_URL` gesetzt. nginx leitet `/mcp` und

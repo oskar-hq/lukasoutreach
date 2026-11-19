@@ -3,6 +3,10 @@
 > Nur der Backend-Agent schreibt hier. Kurz halten, bei jedem Push aktualisieren, Erledigtes nach einer Woche löschen.
 
 ## Woran ich arbeite
+- **`claude/exciting-planck-euf6bn` (19.11., Lukas Punkt 8)** – Personen bei Firmen: `LinkedInService.searchPeopleAtCompany`
+  (klassische Suche, `advanced_keywords: { title, company }`, 1.–3. Grad), `LeadImportQueue.searchCompanies` (Pause 3–8 s,
+  Suchtreffer-Limit wie Gründer-Scraping, optional in die Warteschlange, Feld `firma_suche`), Route `POST
+  /api/leads/company-search`, MCP `search_company_people`. Vertrag in `shared/leadImport.ts`. Tests `leadImport.test.ts`.
 - **`claude/exciting-planck-euf6bn` (19.11., Lukas Punkt 9)** – Eigene KI-Prompts je Instanz: `ai/prompts.ts` (`PromptStore`,
   Tabelle `instance_prompts`, Modul-Quelle `customPrompt(key)`), Schlüssel qualify/prescreen/writer/conversation/assistant.
   Feste Ausgabe-Regeln und Test-Marker hängen die Aufrufer an. Routen `GET/PUT /api/settings/prompts[/:key]` (Rechte wie

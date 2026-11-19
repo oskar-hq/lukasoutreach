@@ -98,3 +98,43 @@ export interface LeadImportStatusResponse {
   recent: LeadImportEntry[];
   message: string;
 }
+
+/**
+ * Personen bei Firmen suchen (Lukas-Instanz 19.11., „Marketing-Leute bei Firma X“):
+ *   POST /api/leads/company-search   LeadCompanySearchRequest → 200 LeadCompanySearchResponse
+ * Je Firma eine klassische LinkedIn-Personensuche (aktuelle Firma + Position) über den Account des Besitzers, 3–8 s Pause,
+ * zählt zum Tageslimit für Suchtreffer. Keine KI, keine Finanz-Qualifizierung. Mit `import: true` gehen die Treffer in
+ * die Import-Warteschlange (wie `POST /api/leads/import`), sonst nur die Liste zum Ansehen.
+ */
+export const COMPANY_SEARCH_MAX_COMPANIES = 20;
+export const COMPANY_SEARCH_MAX_RESULTS = 25;
+
+export interface LeadCompanySearchRequest {
+  /** Firmennamen, wie sie auf LinkedIn als aktuelle Firma stehen. */
+  companies: string[];
+  /** Positions-Stichwort, Standard „Marketing“. */
+  title?: string;
+  /** Treffer je Firma (1–25, Standard 10). */
+  limit?: number;
+  owner?: AuthFounderId;
+  /** true = Treffer gleich in die Import-Warteschlange. */
+  import?: boolean;
+  category?: string;
+  fields?: Record<string, string>;
+}
+
+export interface LeadCompanySearchPerson {
+  profile: string;
+  name: string;
+  headline: string;
+  /** Aktuelle Firma laut Suchtreffer (kann fehlen). */
+  company: string | null;
+  /** Nur mit `import: true`: Ergebnis beim Einreihen. */
+  result?: LeadImportItemResult['status'];
+}
+
+export interface LeadCompanySearchResponse {
+  companies: Array<{ company: string; status: 'ok' | 'skipped' | 'error'; message: string | null; people: LeadCompanySearchPerson[] }>;
+  queued: number;
+  message: string;
+}
