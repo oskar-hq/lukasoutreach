@@ -370,3 +370,30 @@ test('Sicherheitsprüfung 29.10.: Sitzungen beenden (Passwort neu, Konto entfern
   const refreshed = await app.inject({ method: 'POST', url: '/api/oauth/token', payload: { grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: clientId } });
   assert.equal(refreshed.statusCode, 400, 'Refresh-Token ungültig');
 });
+
+test('Claude-App: Leads aus einer Liste – add_lead, import_leads, import_status, set_lead_fields (Lukas-Instanz 19.11.)', async () => {
+  const app = mcpApp();
+  const { tokens } = await connect(app);
+  const client = await mcpClient(app, tokens.access_token);
+  try {
+    const tools = (await client.listTools()).tools.map((tool) => tool.name);
+    for (const name of ['add_lead', 'import_leads', 'import_status', 'set_lead_fields']) assert.ok(tools.includes(name), name);
+
+    const added = textOf(await client.callTool({ name: 'add_lead', arguments: { profile: 'https://www.linkedin.com/in/mcp-gruenderin', category: 'startup_gruender', fields: { welle: '1' } } }));
+    assert.match(added, /^Angelegt: /);
+    const leadId = added.match(/lead_id: ([^)\s]+)/)![1];
+    const detail = textOf(await client.callTool({ name: 'lead_detail', arguments: { lead_id: leadId } }));
+    assert.match(detail, /Felder: welle=1 · kategorie=startup_gruender/);
+
+    const imported = textOf(await client.callTool({ name: 'import_leads', arguments: { items: [{ profile: 'mcp-gruenderin' }, { profile: 'mcp-marketing' }, { profile: 'https://example.com/x' }] } }));
+    assert.match(imported, /# Import: 1 eingereiht, 1 Dubletten, 1 Fehler/);
+    await app.leadImports.tick();
+    const status = textOf(await client.callTool({ name: 'import_status', arguments: {} }));
+    assert.match(status, /1 angelegt, 0 Dubletten, 0 Fehler, 0 warten/);
+
+    const fields = textOf(await client.callTool({ name: 'set_lead_fields', arguments: { lead_id: leadId, fields: { testgruppe: 'B' } } }));
+    assert.match(fields, /testgruppe: B/);
+  } finally {
+    await client.close();
+  }
+});

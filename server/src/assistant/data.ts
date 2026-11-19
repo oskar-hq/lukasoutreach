@@ -363,6 +363,7 @@ export class AssistantData {
       `Profil: ${lead.person.headline} · ${lead.person.location ?? 'Ort unbekannt'} · Website ${lead.company.website ?? '–'} · LinkedIn ${lead.person.profileUrl ?? '–'}`,
       lead.assessment ? `KI-Einstufung: ${CATEGORY_LABELS[lead.assessment.category]} – ${lead.assessment.reason} ${lead.assessment.summary}` : 'Keine KI-Einstufung.',
       lead.nextStep ? `Nächster Schritt: ${lead.nextStep}` : '',
+      lead.fields && Object.keys(lead.fields).length ? `Felder: ${Object.entries(lead.fields).map(([key, value]) => `${key}=${value}`).join(' · ')}` : '',
       lead.conversation?.summary ? `Zusammenfassung des Gesprächs: ${lead.conversation.summary}` : '',
       '',
       'Verlauf:',

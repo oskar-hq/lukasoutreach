@@ -171,6 +171,10 @@ Meta-Werbebibliothek (wer gerade Anzeigen schaltet, geht seit 07.10. markiert mi
 | POST | `/api/leads` | Übergabe aus der Lead-Suche (`NewLeadCard[]`) → neue Leads, Dubletten je providerId übersprungen |
 | POST | `/api/linkedin/chat-sync` | Chats nachträglich mit LinkedIn abgleichen (Hintergrund, `ChatSyncStatus`; `GET` = Fortschritt) – fehlende Nachrichten beider Seiten übernehmen |
 | POST | `/api/leads/contact` | Persönlicher Kontakt per LinkedIn-Link (`AddContactRequest`): ein Profilabruf über den Account des Besitzers, bei 1. Grad bestehenden Chat übernehmen → 201 `AddContactResponse` · 200 schon da |
+| POST | `/api/leads/add` | Listen-Import, einzeln sofort (`LeadAddRequest`, `shared/leadImport.ts`): ein Profilabruf, keine KI/Meta, optional Kategorie, Notiz, freie Felder → 201 `LeadAddResponse` · 200 Dublette · 429 Tageslimit |
+| POST | `/api/leads/import` | Bis 100 Links einreihen (`LeadImportRequest`) → 202 `LeadImportResponse` (je Link queued/duplicate/invalid); Warteschlange hält das Profil-Tageslimit des Accounts ein |
+| GET | `/api/leads/import/status` | Stand der Warteschlange → `LeadImportStatusResponse` |
+| PUT | `/api/leads/:id/fields` | Freie Felder setzen (`{ fields }`, leerer Wert löscht) → `LeadDetailResponse` |
 | POST | `/api/leads/:id/events` | Aktion melden (Anfrage, Nachricht, Antwort, Termin, …) → Stufe nach `LEAD_ACTION_RULES` (auch `reopened` = „Wieder öffnen“ aus Verloren/Übergeben), 409 wenn unpassend; mit `clientId` nie doppelt gebucht |
 | GET | `/api/leads/unsent-invites` | Leads in „Anfrage gesendet“, deren Anfrage nicht über das Cockpit rausging (nur eingetragen) |
 | POST | `/api/leads/unsent-invites/requeue` | `{ ids }` → zurück auf „Neu“ (alte Buchung wird Notiz), `{ requeued, skipped }` |

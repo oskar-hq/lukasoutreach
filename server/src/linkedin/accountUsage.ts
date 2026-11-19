@@ -34,7 +34,7 @@ export type UsageKind = 'profile' | 'search';
  * Wofür ein Abruf war (09.11., nur für den Optimierungs-Bericht): Profil bzw. Firmenseite der Lead-Suche, dasselbe beim
  * Übernehmen neuer Kontakte, Profil beim Aufwärmen, Suchtreffer.
  */
-export type UsageSource = 'lead_profile' | 'lead_company' | 'contact_profile' | 'contact_company' | 'warmup' | 'search';
+export type UsageSource = 'lead_profile' | 'lead_company' | 'contact_profile' | 'contact_company' | 'warmup' | 'search' | 'import_profile';
 export const USAGE_SOURCE_LABELS: Record<UsageSource, string> = {
   lead_profile: 'Lead-Suche: Profil',
   lead_company: 'Lead-Suche: Firmenseite',
@@ -42,6 +42,7 @@ export const USAGE_SOURCE_LABELS: Record<UsageSource, string> = {
   contact_company: 'Neue Kontakte: Firmenseite',
   warmup: 'Aufwärmen: Profil',
   search: 'Suchtreffer',
+  import_profile: 'Listen-Import: Profil',
 };
 /** So lange bleibt das Protokoll je Zweck (der Zähler fürs Limit nur 14 Tage). */
 export const USAGE_LOG_KEEP_DAYS = 120;

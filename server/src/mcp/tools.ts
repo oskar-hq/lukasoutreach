@@ -16,6 +16,7 @@ import { internalAuthHeaders } from '../auth/auth.js';
 import { SETTINGS_INSTRUCTIONS, registerSettingsTools } from './settingsTools.js';
 import { registerSystemTools } from './systemTools.js';
 import { registerFeedbackTools } from './feedbackTools.js';
+import { IMPORT_INSTRUCTIONS, registerImportTools } from './importTools.js';
 
 /**
  * Werkzeuge des MCP-Servers (Vertrag `shared/mcp.ts`) für ein angemeldetes Konto. Lesen wie der KI-Assistent
@@ -35,6 +36,7 @@ export interface McpContext {
 
 const INSTRUCTIONS = `Outreach-Cockpit eines kleinen Teams, das über LinkedIn Kapitalanlage-Vertriebe und Finanzdienstleister anschreibt (früher auch Bauträger). Ablauf je Lead: Vernetzungsanfrage → Erstnachricht → Follow-ups → Antwort → Termin.
 Du kannst alles lesen (Gespräche, Auswertungen, Leads) und das Cockpit bedienen: Aufgaben von heute (todays_tasks) abarbeiten, Anfragen und Nachrichten senden, Antworten eintragen, Termine, Wiedervorlagen, Verloren.
+${IMPORT_INSTRUCTIONS}
 Arbeitsweise bei Aufgaben: erst lead_detail lesen, für Erstnachrichten und Follow-ups die passende Vorlage (list_templates) nehmen und Platzhalter wie {{vorname}} selbst füllen. Vor jedem Senden den Text dem Nutzer zeigen, außer er hat ausdrücklich gesagt, ohne Rückfrage zu senden. Gesendet wird über den LinkedIn-Account des Lead-Besitzers; ist echtes Senden aus, wird nur eingetragen – dann sag dem Nutzer, dass er selbst auf LinkedIn senden muss.
 Zum Verbessern von Suche, KI-Kosten und Einstufung: optimization_report; für Oberfläche, Fehler, Geschwindigkeit und Jobs: usage_report (beide mit sections eingrenzen). Wenn etwas nicht läuft (keine Leads, Limits voll, KI weg): zuerst system_status, notifications und server_logs. Sagt der Nutzer, dass etwas nicht geht oder anders sein soll, und gibt es keine Einstellung dafür: mit submit_feedback an die Entwickler melden. Nach einem Merge ins Repo: start_update.
 Antworte auf Deutsch, per du. Leads als Markdown-Link wie in den Ergebnissen.
@@ -471,6 +473,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
   // ── Einstellungen (31.10.) ──────────────────────────────────────────────
   registerSettingsTools(server, call);
   registerSystemTools(server, call);
+  registerImportTools(server, call, (id, label) => `[${label}](${baseUrl}/?${MCP_LEAD_PARAM}=${encodeURIComponent(id)}) (lead_id: ${id})`);
   registerFeedbackTools(server, call, async (url) => {
     const response = await app.inject({ method: 'GET', url, headers: internalAuthHeaders(user.username) });
     return { status: response.statusCode, body: response.rawPayload, type: String(response.headers['content-type'] ?? 'application/octet-stream') };
