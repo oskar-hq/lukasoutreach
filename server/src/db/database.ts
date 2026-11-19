@@ -924,7 +924,37 @@ export function openDatabase(dataDir: string): Database {
   // WAL: Server und Konten-Befehl dürfen gleichzeitig auf die Datei zugreifen.
   db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
   migrate(db);
+  ensureInstanceSchema(db);
   return db;
+}
+
+/**
+ * Tabellen und Spalten nur dieser Instanz (Lukas, 19.11.): bewusst **ohne** Eintrag in MIGRATIONS, damit spätere
+ * Updates aus `oskar-hq/Scraper` ihre eigenen Migrationen (56, 57 …) ohne Nummern-Konflikt mitbringen können.
+ * Idempotent – läuft bei jedem Öffnen.
+ */
+export function ensureInstanceSchema(db: Database): void {
+  const columns = db.prepare('PRAGMA table_info(leads)').all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === 'fields')) db.exec('ALTER TABLE leads ADD COLUMN fields TEXT');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS lead_imports (
+      id           TEXT PRIMARY KEY,
+      owner        TEXT NOT NULL,
+      profile      TEXT NOT NULL,
+      identifier   TEXT NOT NULL,
+      category     TEXT,
+      note         TEXT,
+      fields       TEXT,
+      status       TEXT NOT NULL,
+      lead_id      TEXT,
+      message      TEXT,
+      actor        TEXT,
+      queued_at    INTEGER NOT NULL,
+      processed_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS lead_imports_status ON lead_imports (status, queued_at);
+    CREATE INDEX IF NOT EXISTS lead_imports_identifier ON lead_imports (identifier);
+  `);
 }
 
 /** Schema auf den Stand `target` bringen (Standard: neuester). `target` nur für Tests (Migration alter Datenbanken). */

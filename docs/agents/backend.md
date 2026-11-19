@@ -3,6 +3,13 @@
 > Nur der Backend-Agent schreibt hier. Kurz halten, bei jedem Push aktualisieren, Erledigtes nach einer Woche löschen.
 
 ## Woran ich arbeite
+- **`claude/exciting-planck-euf6bn` (19.11., Lukas: „Cockpit als Sendemaschine“, Punkt 1 seiner Liste)** – Listen-Import:
+  `leads/importQueue.ts` (Warteschlange `lead_imports`, 3–8 s Pause, Profil-Tageslimit des Accounts über `AccountUsage`,
+  Quelle `import_profile`, Ruhe 1 h bei Zugangsfehlern), `leads/importRoutes.ts` (`POST /api/leads/add`, `POST
+  /api/leads/import`, `GET /api/leads/import/status`, `PUT /api/leads/:id/fields`), MCP `mcp/importTools.ts`
+  (`add_lead`, `import_leads`, `import_status`, `set_lead_fields`). Freie Felder `CockpitLead.fields` (Spalte `leads.fields`),
+  in `lead_detail`. **Schema ohne MIGRATIONS-Eintrag** (`ensureInstanceSchema`), damit Scraper-Updates ihre Migrationen
+  ohne Nummern-Konflikt bringen. Vertrag neu: `shared/leadImport.ts`, `CockpitLead.fields`. Tests `leadImport.test.ts`, `mcp.test.ts`.
 - **`claude/software-bug-check-5f2yyg` (11.11., Feedback #1 von Johannes)** – Kontakt per LinkedIn-Link zählt als
   Vernetzung von Hand: `createContact` schreibt bei „Anfrage gesendet“ `invite_sent` (von Hand), bei „Vernetzt“
   zusätzlich `invite_accepted`; `ConnectionStore.recordContactInvite` merkt die Anfrage als `logged` (mit Annahme).

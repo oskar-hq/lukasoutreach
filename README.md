@@ -486,6 +486,13 @@ Deal Value ändern (`shared/mcp.ts`, Code `server/src/mcp/`).
   `change_account_limits` – gleiche Prüfungen, Rechte und Verlauf wie in der Oberfläche). Zugangsschlüssel und Werte mit
   Passwort-Rückfrage gehen nur in der Oberfläche. Gibt es nichts Passendes, sagt Claude „Das ist leider noch nicht
   gebaut. Wende dich bitte an die Entwickler.“
+- **Leads aus einer Liste (19.11., Lukas-Instanz):** `add_lead` legt einen Lead per LinkedIn-Link sofort an,
+  `import_leads` reiht bis 100 Links ein, `import_status` zeigt den Fortschritt, `set_lead_fields` setzt freie Felder
+  (z. B. `welle`, `testgruppe`, `aufhaenger`). Ein Profilabruf je Link über den Account des Besitzers (`notify=false`),
+  keine KI-Vorprüfung, kein Meta-Check, nichts gesendet. Die Warteschlange macht 3–8 s Pause und hält das
+  Profil-Tageslimit des Accounts ein (Einstellungen → LinkedIn → Grenzen, höchstens 100); ist es voll, geht es am
+  nächsten Tag weiter. Mehrere Personen derselben Firma sind erlaubt. HTTP: `POST /api/leads/add`, `POST /api/leads/import`,
+  `GET /api/leads/import/status`, `PUT /api/leads/:id/fields` (`shared/leadImport.ts`).
 - **Trennen:** im selben Dialog („Trennen“) – das Token ist sofort ungültig. Zugriffstokens gelten 8 h, Claude erneuert
   sie selbst (bis 90 Tage ohne Nutzung).
 - **Voraussetzung:** öffentlich per https erreichbar (Caddy) und `PUBLIC_URL` gesetzt. nginx leitet `/mcp` und

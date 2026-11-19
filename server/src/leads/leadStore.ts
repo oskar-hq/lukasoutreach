@@ -148,6 +148,7 @@ interface LeadRow {
   deal_value?: number | null;
   feedback?: string | null;
   hiring?: string | null;
+  fields?: string | null;
   reply_interest?: string | null;
   follow_up_plan?: string | null;
   follow_up_due?: number | null;
@@ -198,6 +199,7 @@ function toLead(row: LeadRow): CockpitLead {
     followUpPlan: row.follow_up_plan ? JSON.parse(row.follow_up_plan) : null,
     followUpDueAt: row.follow_up_due ?? null,
     queuedInvite: row.queued_invite ? JSON.parse(row.queued_invite) : null,
+    fields: row.fields ? JSON.parse(row.fields) : null,
   };
 }
 
@@ -587,6 +589,31 @@ export class LeadStore {
     const byId = this.findByProviderId(hit.providerId);
     if (byId || !hit.publicIdentifier) return byId;
     return this.findByPublicIdentifier(hit.publicIdentifier);
+  }
+
+  /**
+   * Freie Felder setzen (Lukas-Instanz 19.11., `shared/leadImport.ts`): mischt mit vorhandenen, leerer Wert löscht das
+   * Feld. Gibt den Lead zurück; ohne Änderung keine Zeile im Verlauf.
+   */
+  setFields(id: string, fields: Record<string, string>, by: AuthFounderId | null, now = Date.now(), actor: string | null = null): CockpitLead {
+    return this.transaction(() => {
+      const lead = this.get(id);
+      if (!lead) throw new LeadNotFoundError();
+      const next: Record<string, string> = { ...(lead.fields ?? {}) };
+      const changed: string[] = [];
+      for (const [key, raw] of Object.entries(fields)) {
+        const value = raw.trim();
+        if ((next[key] ?? '') === value) continue;
+        if (value) next[key] = value;
+        else delete next[key];
+        changed.push(key);
+      }
+      if (!changed.length) return lead;
+      const stored = Object.keys(next).length ? JSON.stringify(next) : null;
+      this.db.prepare('UPDATE leads SET fields = ?, updated_at = ? WHERE id = ?').run(stored, now, id);
+      this.insertEvent({ leadId: id, kind: 'note', at: now, by, actor, title: `Felder geändert: ${changed.join(', ')}`, text: null, label: null });
+      return this.get(id)!;
+    });
   }
 
   /** Lead mit dieser öffentlichen LinkedIn-Kennung (Teil des Profil-Links), Groß-/Kleinschreibung egal. */

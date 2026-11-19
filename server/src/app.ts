@@ -31,6 +31,8 @@ import { DbAccountUsage } from './linkedin/accountUsage.js';
 import { FounderAccounts } from './linkedin/founderAccounts.js';
 import { registerLeadRoutes } from './leads/routes.js';
 import { registerLinkedInRoutes } from './linkedin/routes.js';
+import { LeadImportQueue } from './leads/importQueue.js';
+import { registerLeadImportRoutes } from './leads/importRoutes.js';
 import { registerCrmRoutes } from './crm/routes.js';
 import { CrmService } from './crm/service.js';
 import { ConversationService } from './messages/conversation.js';
@@ -316,6 +318,23 @@ export function buildApp({
   app.decorate('linkedinService', linkedin);
   app.decorate('linkedinAudit', audit);
   app.decorate('contactImporter', importer);
+  // Listen-Import (Lukas-Instanz 19.11., Vertrag shared/leadImport.ts): Leads aus einer fertigen Liste, mit Warteschlange.
+  const leadImports = new LeadImportQueue({
+    db,
+    leads,
+    linkedin,
+    usage: accountUsage,
+    prefs: accountPrefs,
+    connections,
+    log: app.log,
+    founderName,
+    busy: () => store.active() !== undefined,
+    minPauseMs: linkedinTest?.minPauseMs,
+  });
+  registerLeadImportRoutes(app, { queue: leadImports, leads, founderName, detail: (id) => (leads.get(id) ? { lead: leads.get(id)!, events: leads.events(id) } : null) });
+  app.decorate('leadImports', leadImports);
+  if (scheduleBackups) leadImports.start();
+  app.addHook('onClose', async () => leadImports.close());
   if (scheduleBackups) warmup.start();
   app.addHook('onClose', async () => warmup.close());
   if (scheduleBackups) linkedin.startBackgroundSync();

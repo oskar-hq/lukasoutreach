@@ -48,3 +48,12 @@ Quelle: Call vom 31.10.2026 („DACH LinkedIn Outreach Plan“).
 - **Human in the Loop:** Die Software sendet über Unipile, aber jede Nachricht wird vorher von Lukas geprüft.
 - **Kosten/Schlüssel:** Unipile und Anthropic zahlt der Kunde, den Anthropic-Schlüssel liefert er.
 - **Updates aus `oskar-hq/Scraper`:** bis `ff45556` (16.11.) übernommen. Upstream-Branch dort: `claude/lead-suche`.
+
+## Gebaut (19.11.)
+
+- **Listen-Import per MCP** (Lukas' Liste, Punkt 1): `add_lead` (sofort), `import_leads` (bis 100, Warteschlange mit
+  Tageslimit), `import_status`, `set_lead_fields`. Ohne KI und Meta-Check; Stufe nach Kontaktgrad (nicht vernetzt → Neu).
+  Kategorie und freie Felder (Welle, Testgruppe, Aufhänger …) liegen in `CockpitLead.fields`.
+- **Mehrere Personen je Firma:** Der Import kennt nur Personen-Dubletten – die Regel „eine Person je Firma“ gilt nur in
+  der Lead-Suche.
+- **Grenze:** nur Lukas' Account → höchstens 100 Profilabrufe am Tag (fest, Unipile-Empfehlung). 4.500 Profile ≈ 45 Tage.
